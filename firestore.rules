@@ -1,0 +1,17 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+    match /patient_profiles/{profileId} {
+      allow read, write: if request.auth != null && (resource == null || request.auth.uid == resource.data.uid);
+      allow create: if request.auth != null && request.auth.uid == request.resource.data.uid;
+    }
+    match /resource_centers/{centerId} {
+      allow read: if true;
+      allow write: if request.auth != null; // Let authenticated specialist users submit edits
+    }
+  }
+}

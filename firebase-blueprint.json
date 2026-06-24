@@ -1,0 +1,66 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "System registered user metadata",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["uid", "email"]
+    },
+    "PatientProfile": {
+      "title": "PatientProfile",
+      "description": "De-identified patient genetic mutations and health profiling criteria",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "city": { "type": "string" },
+        "mutations": { "type": "array" },
+        "ihcResults": { "type": "string" },
+        "regimen": { "type": "string" },
+        "efficacy": { "type": "string" },
+        "summary": { "type": "string" },
+        "lastUpdated": { "type": "string" }
+      },
+      "required": ["uid"]
+    },
+    "ResourceCenter": {
+      "title": "ResourceCenter",
+      "description": "Global clinical clinics and support centers for pancreatic cancer care",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "country": { "type": "string" },
+        "latitude": { "type": "number" },
+        "longitude": { "type": "number" },
+        "specialties": { "type": "array" },
+        "leadDoctors": { "type": "array" },
+        "type": { "type": "string", "enum": ["clinical_center", "research_hub", "patient_guide"] },
+        "explicitCategory": { "type": "string", "enum": ["treatment", "complication", "psychology", "nutrition"] },
+        "description": { "type": "string" },
+        "contact": { "type": "string" },
+        "survivorResources": { "type": "array" }
+      },
+      "required": ["id", "name", "country", "latitude", "longitude", "explicitCategory", "description", "contact"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profile collection"
+    },
+    "/patient_profiles/{profileId}": {
+      "schema": "PatientProfile",
+      "description": "Patient customized genetic profile mappings"
+    },
+    "/resource_centers/{centerId}": {
+      "schema": "ResourceCenter",
+      "description": "All global clinical resource center records"
+    }
+  }
+}

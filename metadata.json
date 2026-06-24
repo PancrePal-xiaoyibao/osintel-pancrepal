@@ -1,0 +1,6 @@
+{
+  "name": "Pancreatic Cancer OSINT Hub",
+  "description": "An autonomous open-source intelligence (OSINT) gathering, scoring, and self-healing system tracking pancreatic cancer clinical trials, drug developments, and patient resources worldwide, powered by Gemini AI.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
