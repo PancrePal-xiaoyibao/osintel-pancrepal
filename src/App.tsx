@@ -1,21 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useState } from 'react';
 import { OSINTItem, WatchdogStatus, ResourceCenter, SystemReport15Day, PatientProfile } from './types';
 import OSINTFeedView from './components/OSINTFeedView';
-import ResourceMapView from './components/ResourceMapView';
-import WatchdogConsoleView from './components/WatchdogConsoleView';
-import ReportsView from './components/ReportsView';
-import GuidelinesView from './components/GuidelinesView';
-import ManualSubmissionView from './components/ManualSubmissionView';
-import TargetInsightView from './components/TargetInsightView';
-import PatientProfileView from './components/PatientProfileView';
-import OSINTChatView from './components/OSINTChatView';
-import AIElementsPlayground from './components/AIElementsPlayground';
 import UserAuth from './components/UserAuth';
-import HelpView from './components/HelpView';
-import HotspotDrugsView from './components/HotspotDrugsView';
 import { auth } from './firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { loadPatientProfileFromCloud, savePatientProfileToCloud, deletePatientProfileFromCloud } from './lib/firestore-sync';
+import { getLlmProvider, LLM_PROVIDER_IDS } from './lib/llm-providers';
 import { MOCK_15DAY_REPORT } from './seed-data';
 import { 
   Activity, 
@@ -47,48 +37,33 @@ import {
 } from 'lucide-react';
 import { LanguageCode, LANGUAGES, TRANSLATIONS } from './translations';
 
-const PROVIDER_PRESET_MODELS: Record<string, string[]> = {
-  siliconflow: [
-    'deepseek-ai/DeepSeek-V3',
-    'deepseek-ai/DeepSeek-R1',
-    'deepseek-ai/DeepSeek-R1-Distill-Qwen-32B',
-    'deepseek-ai/DeepSeek-R1-Distill-Llama-8B',
-    'Qwen/Qwen2.5-72B-Instruct',
-    'Qwen/Qwen2.5-Coder-32B-Instruct',
-    'THUDM/glm-4-9b-chat'
-  ],
-  dashscope: [
-    'qwen-max',
-    'qwen-max-latest',
-    'qwen-plus',
-    'qwen-turbo',
-    'qwen2.5-72b-instruct',
-    'qwen2.5-14b-instruct',
-    'qwen-vl-max-latest'
-  ],
-  openrouter: [
-    'deepseek/deepseek-r1',
-    'meta-llama/llama-3.3-70b-instruct',
-    'anthropic/claude-3.5-sonnet',
-    'google/gemini-2.5-pro',
-    'google/gemini-2.5-flash'
-  ],
-  gemini: [
-    'gemini-2.5-flash',
-    'gemini-2.5-pro',
-    'gemini-1.5-flash',
-    'gemini-1.5-pro',
-    'gemini-2.0-flash',
-    'gemini-2.0-pro-exp'
-  ]
-};
+const ResourceMapView = lazy(() => import('./components/ResourceMapView'));
+const WatchdogConsoleView = lazy(() => import('./components/WatchdogConsoleView'));
+const ReportsView = lazy(() => import('./components/ReportsView'));
+const GuidelinesView = lazy(() => import('./components/GuidelinesView'));
+const ManualSubmissionView = lazy(() => import('./components/ManualSubmissionView'));
+const TargetInsightView = lazy(() => import('./components/TargetInsightView'));
+const PatientProfileView = lazy(() => import('./components/PatientProfileView'));
+const OSINTChatView = lazy(() => import('./components/OSINTChatView'));
+const AIElementsPlayground = lazy(() => import('./components/AIElementsPlayground'));
+const HelpView = lazy(() => import('./components/HelpView'));
+const HotspotDrugsView = lazy(() => import('./components/HotspotDrugsView'));
+const MyPersonalView = lazy(() => import('./components/MyPersonalView'));
+const FloatingChatbot = lazy(() => import('./components/FloatingChatbot'));
+
+const PROVIDER_PRESET_MODELS: Record<string, string[]> = Object.fromEntries(
+  LLM_PROVIDER_IDS.map((id) => [id, getLlmProvider(id).defaultModels])
+);
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'feed' | 'map' | 'watchdog' | 'report' | 'guidelines' | 'target_insight' | 'patient_profile' | 'ai_elements' | 'hotspot_drugs' | 'help'>('feed');
+  const [activeTab, setActiveTab] = useState<'feed' | 'map' | 'watchdog' | 'report' | 'guidelines' | 'target_insight' | 'patient_profile' | 'ai_elements' | 'hotspot_drugs' | 'help' | 'my'>('feed');
   const [expandedOpsSection, setExpandedOpsSection] = useState<'watchdog' | 'report' | null>(null);
   const [items, setItems] = useState<OSINTItem[]>([]);
+  const [newsRefreshMode, setNewsRefreshMode] = useState<'knows' | 'fallback'>('fallback');
+  const [newsWindowLabel, setNewsWindowLabel] = useState<'24h' | '7d' | '30d'>('30d');
   const [centers, setCenters] = useState<ResourceCenter[]>([]);
   const [watchdog, setWatchdog] = useState<WatchdogStatus | null>(null);
+  const [runtimeHealth, setRuntimeHealth] = useState<{ ok: boolean; issues: { code: string; message: string }[] } | null>(null);
   const [isFetching, setIsFetching] = useState(false);
   const [isRepairing, setIsRepairing] = useState(false);
   const [consoleMsg, setConsoleMsg] = useState('System initialized.');
@@ -156,9 +131,9 @@ export default function App() {
       if (firebaseUser) {
         handleUserChanged(firebaseUser, false);
       } else {
-        // Safely guard demo logins from being reset by Firebase initial null ticks
+        // Safely guard demo and local-auth logins from being reset by Firebase initial null ticks
         setCurrentUser((current: any) => {
-          if (current && current.uid === 'demo-pancreas-osint-101') {
+          if (current && (current.uid === 'demo-pancreas-osint-101' || String(current.uid || '').startsWith('local-'))) {
             return current;
           }
           return null;
@@ -171,6 +146,15 @@ export default function App() {
   // Load patient profile and settings from LocalStorage on mount
   useEffect(() => {
     try {
+      // 0. Restore a local username/password session if present
+      const localAuthRaw = localStorage.getItem('pancreas_local_auth');
+      if (localAuthRaw) {
+        const parsed = JSON.parse(localAuthRaw);
+        if (parsed?.user?.uid) {
+          handleUserChanged(parsed.user, true);
+        }
+      }
+
       // 1. Language Loading
       const savedLang = localStorage.getItem('pancreas_osint_language') as LanguageCode;
       if (savedLang && ['ZH','ZT','EN','FR','RU','JA','KO','ES','AR','HI'].includes(savedLang)) {
@@ -294,6 +278,32 @@ export default function App() {
     }
   };
 
+  const handleNewsRefresh = async () => {
+    setIsFetching(true);
+    setConsoleMsg('News refresh: querying KNOWS and rebuilding 24h/7d/30d windows...');
+    try {
+      const resp = await fetch('/api/osint/feed/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: feedSearchTerm || 'pancreatic cancer' })
+      });
+      const resObj = await resp.json();
+      if (resObj.status === 'ok') {
+        setItems(resObj.data || []);
+        setNewsRefreshMode(resObj.mode || 'fallback');
+        setNewsWindowLabel((resObj.windows?.[0]?.label || '30d') as '24h' | '7d' | '30d');
+        setConsoleMsg(`News refresh completed in ${resObj.mode || 'fallback'} mode.`);
+        return;
+      }
+      setConsoleMsg('News refresh returned an error status.');
+    } catch (err) {
+      console.error(err);
+      setConsoleMsg('News refresh failed; keeping existing feed snapshot.');
+    } finally {
+      setIsFetching(false);
+    }
+  };
+
   const handleSaveProfile = (newProfile: PatientProfile) => {
     setProfile(newProfile);
     try {
@@ -340,19 +350,24 @@ export default function App() {
   useEffect(() => {
     async function loadInitialData() {
       try {
-        const [feedRes, coordRes, dogRes] = await Promise.all([
-          fetch('/api/osint/feed'),
+        const [feedRes, coordRes, dogRes, healthRes] = await Promise.all([
+          fetch('/api/osint/feed?window=30d'),
           fetch('/api/osint/resources'),
-          fetch('/api/osint/watchdog')
+          fetch('/api/osint/watchdog'),
+          fetch('/api/health')
         ]);
         
         const feedObj = await feedRes.json();
         const coordObj = await coordRes.json();
         const dogObj = await dogRes.json();
+        const healthObj = await healthRes.json();
 
         setItems(feedObj.data || []);
+        setNewsRefreshMode(feedObj.mode || 'fallback');
+        setNewsWindowLabel((feedObj.selectedWindow || feedObj.windows?.[0]?.label || '30d') as '24h' | '7d' | '30d');
         setCenters(coordObj.data || []);
         setWatchdog(dogObj.data || null);
+        setRuntimeHealth(healthObj.data || null);
       } catch (err) {
         console.error('Failed to sync state from full-stack server endpoints, utilizing offline fallback:', err);
         setConsoleMsg('API Server unreachable. System in isolated standalone local mode.');
@@ -366,11 +381,14 @@ export default function App() {
   // Set up periodic polling for Watchdog telemetry metrics (e.g., CPU, API counts) to keep dashboard responsive
   useEffect(() => {
     const timer = setInterval(() => {
-      fetch('/api/osint/watchdog')
-        .then(res => res.json())
-        .then(resObj => {
-          if (resObj.status === 'ok') {
-            setWatchdog(resObj.data);
+      Promise.all([fetch('/api/osint/watchdog'), fetch('/api/health')])
+        .then(async ([watchdogRes, healthRes]) => {
+          const [watchdogObj, healthObj] = await Promise.all([watchdogRes.json(), healthRes.json()]);
+          if (watchdogObj.status === 'ok') {
+            setWatchdog(watchdogObj.data);
+          }
+          if (healthObj.status === 'ok') {
+            setRuntimeHealth(healthObj.data);
           }
         })
         .catch(() => {
@@ -485,11 +503,11 @@ export default function App() {
     return (
       <div className="min-h-screen bg-[#050505] flex flex-col justify-center items-center relative">
         <div className="absolute inset-0 overflow-hidden pointer-events-none">
-          <div className="absolute -top-24 -right-24 w-96 h-96 bg-blue-500/5 rounded-full blur-[100px]"></div>
+          <div className="absolute -top-24 -right-24 w-96 h-96 bg-slate-500/5 rounded-full blur-[100px]"></div>
           <div className="absolute -bottom-24 -left-24 w-64 h-64 bg-white/5 rounded-full blur-[80px]"></div>
         </div>
-        <Activity className="h-10 w-10 text-blue-400 animate-spin mb-4 relative z-10" />
-        <p className="text-base font-serif italic text-white relative z-10">Pancreas OSINT.</p>
+        <Activity className="h-10 w-10 text-slate-300 animate-spin mb-4 relative z-10" />
+        <p className="text-base font-sans italic text-white relative z-10">Pancreas OSINT.</p>
         <p className="text-xs text-white/45 mt-2 relative z-10 font-mono uppercase tracking-widest">Node active: synchronizing global core registry...</p>
       </div>
     );
@@ -501,14 +519,14 @@ export default function App() {
     return (
       <div className="min-h-screen bg-[#050505] flex flex-col justify-center items-center relative py-8 px-4 overflow-y-auto">
         <div className="absolute inset-0 overflow-hidden pointer-events-none">
-          <div className="absolute -top-32 -right-32 w-[500px] h-[500px] bg-purple-500/[0.03] rounded-full blur-[120px]"></div>
-          <div className="absolute -bottom-32 -left-32 w-[400px] h-[400px] bg-indigo-500/[0.02] rounded-full blur-[100px]"></div>
+          <div className="absolute -top-32 -right-32 w-[500px] h-[500px] bg-slate-500/[0.03] rounded-full blur-[120px]"></div>
+          <div className="absolute -bottom-32 -left-32 w-[400px] h-[400px] bg-zinc-500/[0.02] rounded-full blur-[100px]"></div>
         </div>
         
         {/* Welcome branding header */}
         <div className="text-center mb-6 max-w-sm space-y-2 relative z-10 animate-fade-in shrink-0">
-          <div className="inline-flex p-3 bg-purple-950/40 border border-purple-500/20 rounded-2xl text-purple-400 mb-1">
-            <HeartPulse className="h-6 w-6 text-purple-400 animate-pulse" />
+          <div className="inline-flex p-3 bg-slate-950/40 border border-slate-500/20 rounded-2xl text-slate-300 mb-1">
+            <HeartPulse className="h-6 w-6 text-slate-300 animate-pulse" />
           </div>
           <h1 className="text-xl font-bold tracking-tight text-white font-sans uppercase">
             Pancreas OSINT
@@ -537,8 +555,8 @@ export default function App() {
     <div className="min-h-screen text-zinc-300 flex flex-col font-sans bg-[#050505] selection:bg-[#9333ea]/30 selection:text-white">
       
       {/* Absolute High-Contrast Global Medical Redline Banner */}
-      <div className="bg-rose-950/30 text-rose-300 text-[11px] sm:text-xs py-2 px-6 border-b border-rose-900/30 text-center flex justify-center items-center gap-2 select-none leading-normal shrink-0 glass">
-        <ShieldAlert className="h-4 w-4 shrink-0 text-rose-400" />
+      <div className="bg-slate-950/40 text-slate-300 text-[11px] sm:text-xs py-2 px-6 border-b border-white/10 text-center flex justify-center items-center gap-2 select-none leading-normal shrink-0 glass">
+        <ShieldAlert className="h-4 w-4 shrink-0 text-slate-400" />
         <span className="font-sans">
           {t.bannerTitle}
         </span>
@@ -548,13 +566,13 @@ export default function App() {
       <header className="border-b border-white/10 px-4 sm:px-8 py-4 flex flex-col md:flex-row justify-between md:items-center gap-4 glass z-10 sticky top-0 backdrop-blur-md">
         <div className="max-w-7xl w-full mx-auto flex flex-col sm:flex-row gap-4 justify-between items-start sm:items-center">
           <div className="flex items-center gap-4">
-            <div className="p-1.5 bg-teal-500/10 border border-teal-500/30 rounded-xl shrink-0 flex items-center justify-center shadow-lg shadow-teal-500/20 shadow-[0_0_15px_rgba(45,212,191,0.35)] animate-pulse" title="小胰宝 AI 助手 Mascot">
+            <div className="p-1.5 bg-slate-500/10 border border-slate-500/30 rounded-xl shrink-0 flex items-center justify-center shadow-lg shadow-black/20 animate-pulse" title="小胰宝 AI 助手 Mascot">
               <svg width="26" height="26" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" className="shrink-0">
                 <defs>
-                  <linearGradient id="teal-body-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-                    <stop offset="0%" stopColor="#2dd4bf" />
-                    <stop offset="50%" stopColor="#14b8a6" />
-                    <stop offset="100%" stopColor="#0f766e" />
+                  <linearGradient id="slate-body-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stopColor="#94a3b8" />
+                    <stop offset="50%" stopColor="#64748b" />
+                    <stop offset="100%" stopColor="#334155" />
                   </linearGradient>
                   <linearGradient id="heart-grad" x1="0%" y1="0%" x2="100%" y2="100%">
                     <stop offset="0%" stopColor="#fb923c" />
@@ -574,29 +592,29 @@ export default function App() {
                 </defs>
 
                 {/* Antenna */}
-                <rect x="47" y="14" width="6" height="12" rx="3" fill="#14b8a6" />
+                <rect x="47" y="14" width="6" height="12" rx="3" fill="#64748b" />
                 <circle cx="50" cy="11" r="7.5" fill="url(#antenna-grad)" stroke="#d97706" strokeWidth="0.5" />
                 <circle cx="48" cy="9" r="2" fill="#ffffff" opacity="0.8" />
 
                 {/* Ears */}
-                <rect x="13" y="38" width="8" height="18" rx="4" fill="#0f766e" />
-                <rect x="79" y="38" width="8" height="18" rx="4" fill="#0f766e" />
+                <rect x="13" y="38" width="8" height="18" rx="4" fill="#475569" />
+                <rect x="79" y="38" width="8" height="18" rx="4" fill="#475569" />
 
                 {/* Head */}
-                <rect x="18" y="24" width="64" height="48" rx="24" fill="url(#teal-body-grad)" filter="url(#soft-shadow)" />
+                <rect x="18" y="24" width="64" height="48" rx="24" fill="url(#slate-body-grad)" filter="url(#soft-shadow)" />
 
                 {/* Visor/Face Shield */}
                 <path d="M26 48 C26 36, 40 34, 50 34 C60 34, 74 36, 74 48 C74 60, 60 60, 50 60 C40 60, 26 60, 26 48 Z" fill="url(#visor-grad)" />
 
                 {/* Smiling Eyes */}
-                <path d="M35 48 C37 44, 43 44, 45 48" stroke="#0f766e" strokeWidth="3" strokeLinecap="round" fill="none" />
-                <path d="M55 48 C57 44, 63 44, 65 48" stroke="#0f766e" strokeWidth="3" strokeLinecap="round" fill="none" />
+                <path d="M35 48 C37 44, 43 44, 45 48" stroke="#334155" strokeWidth="3" strokeLinecap="round" fill="none" />
+                <path d="M55 48 C57 44, 63 44, 65 48" stroke="#334155" strokeWidth="3" strokeLinecap="round" fill="none" />
 
                 {/* Neck */}
-                <rect x="43" y="68" width="14" height="8" fill="#0f766e" />
+                <rect x="43" y="68" width="14" height="8" fill="#475569" />
 
                 {/* Body Peeking */}
-                <path d="M32 76 C32 88, 68 88, 68 76 Z" fill="url(#teal-body-grad)" />
+                <path d="M32 76 C32 88, 68 88, 68 76 Z" fill="url(#slate-body-grad)" />
 
                 {/* Heart on Chest */}
                 <path d="M50 84 C50 84 45 79.5 45 76.5 C45 74.2 46.8 72.8 48.8 72.8 C50 72.8 50 74 50 74 C50 74 51 72.8 52.2 72.8 C54.2 72.8 56 74.2 56 76.5 C56 79.5 50 84 50 84 Z" fill="url(#heart-grad)" />
@@ -605,13 +623,13 @@ export default function App() {
             <div>
               <div className="flex flex-col">
                 <h1 className="text-xl sm:text-2xl font-sans font-extrabold text-white tracking-tight leading-none flex items-center gap-1.5">
-                  小胰宝 <span className="font-extrabold text-purple-400 font-mono tracking-wide uppercase">OSINT</span>
+                  小胰宝 <span className="font-extrabold text-slate-300 font-mono tracking-wide uppercase">OSINT</span>
                 </h1>
                 <p className="text-[11px] sm:text-xs text-white/90 font-sans font-medium mt-1.5 leading-snug">
                   全球胰腺肿瘤开源情报中心
                 </p>
                 <div className="flex items-center gap-1.5 mt-1">
-                  <span className="text-[9px] bg-purple-500/15 border border-purple-500/30 text-purple-300 px-1.5 py-0.25 rounded font-mono uppercase tracking-wide opacity-90">
+                  <span className="text-[9px] bg-slate-500/15 border border-slate-500/30 text-slate-300 px-1.5 py-0.25 rounded font-mono uppercase tracking-wide opacity-90">
                     Autonomous MVP v1.5
                   </span>
                 </div>
@@ -632,13 +650,13 @@ export default function App() {
                     }
                   }}
                   className={`bg-white/5 border px-3 py-1.5 rounded-lg text-left transition cursor-pointer select-none ${
-                    expandedOpsSection === 'watchdog' ? 'border-emerald-500/50 bg-emerald-950/10' : 'border-white/10 hover:border-emerald-500/30'
+                    expandedOpsSection === 'watchdog' ? 'border-slate-500/50 bg-slate-950/20' : 'border-white/10 hover:border-slate-500/30'
                   }`}
                   title="点击打开智能控制台浮窗"
                 >
                   <span className="text-white/40 block text-[9px] uppercase tracking-wider cursor-pointer">{t.statusTitle}</span>
-                  <span className="text-emerald-400 font-bold flex items-center gap-1 mt-0.5 cursor-pointer">
-                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                  <span className="text-slate-300 font-bold flex items-center gap-1 mt-0.5 cursor-pointer">
+                    <span className="h-1.5 w-1.5 rounded-full bg-slate-400 animate-pulse"></span>
                     HEALTHY
                   </span>
                 </button>
@@ -652,7 +670,7 @@ export default function App() {
                     }
                   }}
                   className={`bg-white/5 border px-3 py-1.5 rounded-lg text-left transition cursor-pointer select-none ${
-                    expandedOpsSection === 'report' ? 'border-emerald-500/50 bg-emerald-950/10' : 'border-white/10 hover:border-emerald-500/30'
+                    expandedOpsSection === 'report' ? 'border-slate-500/50 bg-slate-950/20' : 'border-white/10 hover:border-slate-500/30'
                   }`}
                   title="点击打开15天运行运维报告浮窗"
                 >
@@ -662,7 +680,17 @@ export default function App() {
 
                 <div className="bg-white/5 border border-white/10 px-3 py-1.5 rounded-lg">
                   <span className="text-white/40 block text-[9px] uppercase tracking-wider">{t.quotaTitle}</span>
-                  <span className="text-emerald-400 font-bold block mt-0.5">{watchdog.apiQuotaUsed}</span>
+                  <span className="text-slate-300 font-bold block mt-0.5">{watchdog.apiQuotaUsed}</span>
+                </div>
+
+                <div className="bg-white/5 border border-white/10 px-3 py-1.5 rounded-lg min-w-[150px]">
+                  <span className="text-white/40 block text-[9px] uppercase tracking-wider">Runtime Health</span>
+                  <span className={`font-bold block mt-0.5 ${runtimeHealth?.ok ? 'text-slate-300' : 'text-amber-400'}`}>
+                    {runtimeHealth?.ok ? 'OK' : 'CHECK'}
+                  </span>
+                  <span className="text-[10px] text-white/45 block mt-0.5">
+                    {runtimeHealth?.issues?.length ? `${runtimeHealth.issues.length} issue(s)` : 'all probes pass'}
+                  </span>
                 </div>
               </div>
             )}
@@ -676,10 +704,10 @@ export default function App() {
               <div className="relative font-sans">
                 <button
                   onClick={() => setIsLangDropdownOpen(!isLangDropdownOpen)}
-                  className="flex items-center gap-1.5 px-2.5 py-1.5 bg-zinc-900 border border-white/10 hover:border-emerald-500/40 rounded-xl text-xs font-semibold text-zinc-300 transition cursor-pointer"
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 bg-zinc-900 border border-white/10 hover:border-slate-500/40 rounded-xl text-xs font-semibold text-zinc-300 transition cursor-pointer"
                   title="Select Language / 选择语言"
                 >
-                  <Globe className="h-3.5 w-3.5 text-emerald-400" />
+                  <Globe className="h-3.5 w-3.5 text-slate-400" />
                   <span>
                     {LANGUAGES.find(l => l.code === activeLanguage)?.flag || '🇺🇸'}{' '}
                     {LANGUAGES.find(l => l.code === activeLanguage)?.localeName || 'EN'}
@@ -694,14 +722,14 @@ export default function App() {
                         key={lang.code}
                         onClick={() => handleSelectLanguage(lang.code)}
                         className={`w-full text-left px-3 py-1.5 text-xs flex items-center justify-between transition cursor-pointer hover:bg-white/5 ${
-                          activeLanguage === lang.code ? 'text-emerald-300 font-bold bg-emerald-950/10' : 'text-zinc-400'
+                          activeLanguage === lang.code ? 'text-slate-300 font-bold bg-slate-950/10' : 'text-zinc-400'
                         }`}
                       >
                         <span className="flex items-center gap-2">
                           <span>{lang.flag}</span>
                           <span>{lang.name}</span>
                         </span>
-                        {activeLanguage === lang.code && <Check className="h-3.5 w-3.5 text-emerald-400 font-bold" />}
+                        {activeLanguage === lang.code && <Check className="h-3.5 w-3.5 text-slate-400 font-bold" />}
                       </button>
                     ))}
                   </div>
@@ -711,10 +739,10 @@ export default function App() {
               {/* Help Guide Logo & Entrance Button */}
               <button
                 onClick={() => setActiveTab('help')}
-                className={`p-2 bg-gradient-to-tr from-zinc-900 to-zinc-950 hover:from-emerald-950/20 hover:to-emerald-900/20 text-zinc-300 hover:text-emerald-300 border rounded-xl transition cursor-pointer relative group shrink-0 ${
+                className={`p-2 bg-gradient-to-tr from-zinc-900 to-zinc-950 hover:from-slate-950/20 hover:to-slate-900/20 text-zinc-300 hover:text-slate-200 border rounded-xl transition cursor-pointer relative group shrink-0 ${
                   activeTab === 'help' 
-                    ? 'border-emerald-500 text-emerald-300 bg-emerald-950/20' 
-                    : 'border-white/10 hover:border-emerald-500/30'
+                    ? 'border-slate-500 text-slate-200 bg-slate-950/20' 
+                    : 'border-white/10 hover:border-slate-500/30'
                 }`}
                 title="帮助中心 & 新手指引 / Help Guide"
               >
@@ -724,12 +752,12 @@ export default function App() {
               {/* Config Gear Button */}
               <button
                 onClick={() => setIsConfigOpen(true)}
-                className="p-2 bg-gradient-to-tr from-zinc-900 to-zinc-950 hover:from-emerald-950/20 hover:to-emerald-900/20 text-zinc-300 hover:text-emerald-300 border border-white/10 hover:border-emerald-500/30 rounded-xl transition cursor-pointer relative group shrink-0"
+                className="p-2 bg-gradient-to-tr from-zinc-900 to-zinc-950 hover:from-slate-950/20 hover:to-slate-900/20 text-zinc-300 hover:text-slate-200 border border-white/10 hover:border-slate-500/30 rounded-xl transition cursor-pointer relative group shrink-0"
                 title={t.configBtnTooltip}
               >
                 <Settings className="h-4.5 w-4.5" />
                 <span className="absolute top-0 right-0 flex h-1.5 w-1.5">
-                  <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500"></span>
+                  <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-slate-400"></span>
                 </span>
               </button>
             </div>
@@ -756,6 +784,23 @@ export default function App() {
             </button>
 
             <button
+              onClick={() => setActiveTab('my')}
+              className={`py-2 px-4 rounded-lg text-xs sm:text-sm font-semibold whitespace-nowrap transition cursor-pointer flex items-center gap-1.5 ${
+                activeTab === 'my'
+                  ? 'bg-teal-600/15 text-teal-200 font-medium border border-teal-500/30'
+                  : 'text-teal-300/60 hover:text-teal-200 hover:bg-teal-900/10'
+              }`}
+            >
+              <HeartPulse className="h-4 w-4 shrink-0 text-teal-400" />
+              {t.tabMy || '我的专属'}
+              {profile ? (
+                <span className="h-1.5 w-1.5 rounded-full bg-teal-400 animate-pulse"></span>
+              ) : (
+                <span className="text-[9px] bg-zinc-800 border border-white/5 text-zinc-500 px-1 rounded">SET</span>
+              )}
+            </button>
+
+            <button
               onClick={() => setActiveTab('target_insight')}
               className={`py-2 px-4 rounded-lg text-xs sm:text-sm font-semibold whitespace-nowrap transition cursor-pointer flex items-center gap-1.5 ${
                 activeTab === 'target_insight' 
@@ -763,7 +808,7 @@ export default function App() {
                   : 'text-white/50 hover:text-white hover:bg-white/5'
               }`}
             >
-              <Target className="h-4 w-4 shrink-0 text-emerald-400/90" />
+              <Target className="h-4 w-4 shrink-0 text-slate-400/90" />
               {t.tabTargetInsight}
             </button>
 
@@ -771,11 +816,11 @@ export default function App() {
               onClick={() => setActiveTab('hotspot_drugs')}
               className={`py-2 px-4 rounded-lg text-xs sm:text-sm font-semibold whitespace-nowrap transition cursor-pointer flex items-center gap-1.5 ${
                 activeTab === 'hotspot_drugs' 
-                  ? 'bg-emerald-600/15 text-emerald-200 font-medium border border-emerald-500/30' 
+                  ? 'bg-slate-600/15 text-slate-200 font-medium border border-slate-500/30' 
                   : 'text-white/50 hover:text-white hover:bg-white/5'
               }`}
             >
-              <Sparkles className="h-4 w-4 shrink-0 text-emerald-400/90" />
+              <Sparkles className="h-4 w-4 shrink-0 text-slate-400/90" />
               {t.tabHotspotDrugs}
             </button>
 
@@ -811,14 +856,14 @@ export default function App() {
               onClick={() => setActiveTab('patient_profile')}
               className={`py-2 px-4 rounded-lg text-xs sm:text-sm font-semibold whitespace-nowrap transition cursor-pointer flex items-center gap-1.5 ${
                 activeTab === 'patient_profile' 
-                  ? 'bg-emerald-600/15 text-emerald-200 font-medium border border-emerald-500/30' 
-                  : 'text-emerald-300/60 hover:text-emerald-300 hover:bg-emerald-900/10'
+                  ? 'bg-slate-600/15 text-slate-200 font-medium border border-slate-500/30' 
+                  : 'text-slate-300/60 hover:text-slate-200 hover:bg-slate-900/10'
               }`}
             >
               <User className="h-4 w-4 shrink-0 text-zinc-400" />
               {t.tabPatientProfile}
               {profile ? (
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                <span className="h-1.5 w-1.5 rounded-full bg-slate-400 animate-pulse"></span>
               ) : (
                 <span className="text-[9px] bg-zinc-800 border border-white/5 text-zinc-500 px-1 rounded">OFF</span>
               )}
@@ -831,23 +876,23 @@ export default function App() {
       {/* Main Body Layout Container */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-8 relative">
         <div className="absolute inset-0 overflow-hidden pointer-events-none">
-          <div className="absolute top-1/4 -right-32 w-[400px] h-[400px] bg-emerald-500/[0.01] rounded-full blur-[120px]"></div>
+          <div className="absolute top-1/4 -right-32 w-[400px] h-[400px] bg-slate-500/[0.01] rounded-full blur-[120px]"></div>
           <div className="absolute bottom-1/4 -left-32 w-[350px] h-[350px] bg-white/[0.01] rounded-full blur-[100px]"></div>
         </div>
         
         <div className="relative z-10 space-y-6">
           
           {/* Dual-Perspective / Matchmaker Status Bar & Control Row */}
-          {activeTab !== 'watchdog' && activeTab !== 'report' && activeTab !== 'guidelines' && activeTab !== 'patient_profile' && activeTab !== 'ai_elements' && (
+          {activeTab !== 'watchdog' && activeTab !== 'report' && activeTab !== 'guidelines' && activeTab !== 'patient_profile' && activeTab !== 'ai_elements' && activeTab !== 'my' && (
             <div className="bg-zinc-950/80 border border-white/10 rounded-2xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 glass shadow-xl shadow-black/40">
               <div className="flex items-center gap-3">
                 <div className={`p-2 rounded-lg border transition ${
                   perspective === 'personalized'
-                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                    ? 'bg-slate-500/10 border-slate-500/30 text-slate-300'
                     : 'bg-zinc-900 border-white/5 text-zinc-400'
                 }`}>
                   {perspective === 'personalized' ? (
-                    <Sparkles className="h-5 w-5 text-emerald-400 animate-pulse" />
+                    <Sparkles className="h-5 w-5 text-slate-300 animate-pulse" />
                   ) : (
                     <Info className="h-5 w-5 text-zinc-400" />
                   )}
@@ -859,10 +904,10 @@ export default function App() {
                     </span>
                     <span className={`text-[9px] px-1.5 py-0.2 rounded font-bold font-mono tracking-wider ${
                       perspective === 'personalized' 
-                        ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30' 
+                        ? 'bg-slate-500/15 text-slate-300 border border-slate-500/30' 
                         : 'bg-zinc-800 text-zinc-400 border border-zinc-700'
                     }`}>
-                      {perspective === 'personalized' ? '🎯 PERSONALIZED MODE / 个性化匹配视角' : '🌐 GENERIC MODE / 全面通用视角'}
+                      {perspective === 'personalized' ? 'PERSONALIZED MODE / 个性化匹配视角' : 'GENERIC MODE / 全面通用视角'}
                     </span>
                   </div>
                   <p className="text-xs text-zinc-400 mt-1 leading-normal font-sans">
@@ -901,8 +946,8 @@ export default function App() {
                   }}
                   className={`py-1.5 px-3 rounded-lg text-xs font-semibold cursor-pointer border transition duration-150 flex items-center gap-1.5 ${
                     perspective === 'personalized'
-                      ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-300 font-medium'
-                      : 'bg-black/40 border-white/5 text-zinc-500 hover:text-emerald-300 hover:border-emerald-500/20'
+                      ? 'bg-slate-500/10 border-slate-500/40 text-slate-300 font-medium'
+                      : 'bg-black/40 border-white/5 text-zinc-500 hover:text-slate-300 hover:border-slate-500/20'
                   }`}
                 >
                   <Sparkles className="h-3 w-3" />
@@ -912,7 +957,7 @@ export default function App() {
                 {!profile && (
                   <button
                     onClick={() => setActiveTab('patient_profile')}
-                    className="text-[11px] text-emerald-400 hover:text-emerald-300 underline font-semibold font-sans shrink-0 pl-1"
+                    className="text-[11px] text-slate-300 hover:text-slate-200 underline font-semibold font-sans shrink-0 pl-1"
                   >
                     维护本地特征 ➔
                   </button>
@@ -926,7 +971,7 @@ export default function App() {
               {!currentUser && (
                 <div className="bg-[#09090c]/40 border border-zinc-850 rounded-2xl p-6 md:p-8 flex flex-col items-center justify-center text-center max-w-xl mx-auto space-y-4 shadow-xl shadow-black/[0.01] animate-fade-in font-sans">
                   <div className="space-y-2">
-                    <span className="text-[10px] uppercase tracking-widest text-emerald-400 font-bold font-mono">
+                    <span className="text-[10px] uppercase tracking-widest text-slate-300 font-bold font-mono">
                       云同步与个性化医学研判中心 / CLOUD OSINT CO-PILOT
                     </span>
                     <h3 className="text-xl font-light font-serif text-white">
@@ -945,10 +990,12 @@ export default function App() {
 
               <OSINTFeedView 
                 items={items}
-                onFetchNew={handleIngestNew}
+                onFetchNew={handleNewsRefresh}
                 onGenerateSummary={handleGenerateSummary}
                 isFetching={isFetching}
                 statusMessage={consoleMsg}
+                newsRefreshMode={newsRefreshMode}
+                newsWindowLabel={newsWindowLabel}
                 onOpenSubmission={() => setIsSubmissionOpen(true)}
                 searchTerm={feedSearchTerm}
                 onSearchTermChange={setFeedSearchTerm}
@@ -965,59 +1012,91 @@ export default function App() {
           )}
 
           {activeTab === 'target_insight' && (
-            <TargetInsightView 
-              items={items}
-              onSelectFeedFilter={setFeedSearchTerm}
-              onNavigateToTab={setActiveTab}
-              onItemsChange={setItems}
-              patientProfile={profile}
-              perspective={perspective}
-            />
+            <Suspense fallback={<div className="rounded-2xl border border-white/10 bg-zinc-950/80 p-6 text-sm text-zinc-400">Loading target insight...</div>}>
+              <TargetInsightView 
+                items={items}
+                onSelectFeedFilter={setFeedSearchTerm}
+                onNavigateToTab={setActiveTab}
+                onItemsChange={setItems}
+                patientProfile={profile}
+                perspective={perspective}
+              />
+            </Suspense>
           )}
 
           {activeTab === 'map' && (
-            <ResourceMapView 
-              centers={centers} 
-              patientProfile={profile}
-              perspective={perspective}
-            />
+            <Suspense fallback={<div className="rounded-2xl border border-white/10 bg-zinc-950/80 p-6 text-sm text-zinc-400">Loading resource map...</div>}>
+              <ResourceMapView 
+                centers={centers} 
+                patientProfile={profile}
+                perspective={perspective}
+              />
+            </Suspense>
           )}
 
           {false && watchdog && (
-            <WatchdogConsoleView 
-              status={watchdog}
-              isRepairing={isRepairing}
-              onTriggerRepair={handleTriggerRepair}
-              onTriggerRollback={handleTriggerRollback}
-            />
+            <Suspense fallback={null}>
+              <WatchdogConsoleView 
+                status={watchdog}
+                isRepairing={isRepairing}
+                onTriggerRepair={handleTriggerRepair}
+                onTriggerRollback={handleTriggerRollback}
+              />
+            </Suspense>
           )}
 
           {false && (
-            <ReportsView report={MOCK_15DAY_REPORT} />
+            <Suspense fallback={null}>
+              <ReportsView report={MOCK_15DAY_REPORT} />
+            </Suspense>
           )}
 
           {activeTab === 'guidelines' && (
-            <GuidelinesView language={activeLanguage} />
+            <Suspense fallback={<div className="rounded-2xl border border-white/10 bg-zinc-950/80 p-6 text-sm text-zinc-400">Loading guidelines...</div>}>
+              <GuidelinesView language={activeLanguage} />
+            </Suspense>
           )}
 
           {activeTab === 'hotspot_drugs' && (
-            <HotspotDrugsView />
+            <Suspense fallback={<div className="rounded-2xl border border-white/10 bg-zinc-950/80 p-6 text-sm text-zinc-400">Loading drug view...</div>}>
+              <HotspotDrugsView />
+            </Suspense>
           )}
 
           {activeTab === 'help' && (
-            <HelpView 
-              language={activeLanguage}
-              onNavigateToTab={setActiveTab}
-            />
+            <Suspense fallback={<div className="rounded-2xl border border-white/10 bg-zinc-950/80 p-6 text-sm text-zinc-400">Loading help...</div>}>
+              <HelpView 
+                language={activeLanguage}
+                onNavigateToTab={setActiveTab}
+              />
+            </Suspense>
           )}
 
           {activeTab === 'patient_profile' && (
-            <PatientProfileView 
-              profile={profile}
-              onSaveProfile={handleSaveProfile}
-              onClearProfile={handleClearProfile}
-              language={activeLanguage}
-            />
+            <Suspense fallback={<div className="rounded-2xl border border-white/10 bg-zinc-950/80 p-6 text-sm text-zinc-400">Loading profile...</div>}>
+              <PatientProfileView 
+                profile={profile}
+                onSaveProfile={handleSaveProfile}
+                onClearProfile={handleClearProfile}
+                language={activeLanguage}
+              />
+            </Suspense>
+          )}
+
+          {activeTab === 'my' && (
+            <Suspense fallback={<div className="rounded-2xl border border-white/10 bg-zinc-950/80 p-6 text-sm text-zinc-400">Loading personalized hub...</div>}>
+              <MyPersonalView
+                profile={profile}
+                language={activeLanguage}
+                llmConfig={{
+                  provider: configProvider,
+                  apiKey: configApiKey,
+                  baseUrl: configBaseUrl,
+                  model: configModel
+                }}
+                onConfigureProfile={() => setActiveTab('patient_profile')}
+              />
+            </Suspense>
           )}
 
 
@@ -1051,7 +1130,7 @@ export default function App() {
                 </div>
                 <button 
                   onClick={() => setExpandedOpsSection(null)}
-                  className="p-1.5 px-3 bg-zinc-900 border border-white/10 hover:border-rose-500/25 text-zinc-400 hover:text-rose-400 transition rounded-xl text-xs flex items-center gap-1.5 cursor-pointer font-sans"
+                  className="p-1.5 px-3 bg-zinc-900 border border-white/10 hover:border-slate-500/25 text-zinc-400 hover:text-slate-300 transition rounded-xl text-xs flex items-center gap-1.5 cursor-pointer font-sans"
                 >
                   <X className="h-4 w-4" />
                   <span>关闭面板</span>
@@ -1059,16 +1138,20 @@ export default function App() {
               </div>
 
               {expandedOpsSection === 'watchdog' && watchdog && (
-                <WatchdogConsoleView 
-                  status={watchdog}
-                  isRepairing={isRepairing}
-                  onTriggerRepair={handleTriggerRepair}
-                  onTriggerRollback={handleTriggerRollback}
-                />
+                <Suspense fallback={null}>
+                  <WatchdogConsoleView 
+                    status={watchdog}
+                    isRepairing={isRepairing}
+                    onTriggerRepair={handleTriggerRepair}
+                    onTriggerRollback={handleTriggerRollback}
+                  />
+                </Suspense>
               )}
 
               {expandedOpsSection === 'report' && (
-                <ReportsView report={MOCK_15DAY_REPORT} />
+                <Suspense fallback={null}>
+                  <ReportsView report={MOCK_15DAY_REPORT} />
+                </Suspense>
               )}
             </div>
           </div>
@@ -1079,7 +1162,7 @@ export default function App() {
       <footer className="bg-zinc-950 border-t border-white/10 shrink-0 text-xs text-white/40">
         <div className="max-w-7xl mx-auto px-4 sm:px-8 py-6 flex flex-col md:flex-row justify-between items-center gap-4">
           <div className="space-y-1 text-center md:text-left">
-            <p className="font-serif italic font-light text-white text-sm">
+            <p className="font-sans italic font-light text-white text-sm">
               Pancreas OSINT.
             </p>
             <p className="text-white/40">
@@ -1090,25 +1173,30 @@ export default function App() {
           <div className="flex flex-col items-center md:items-end font-mono text-[10px] space-y-1">
             <span>Server Local Time: 2026-06-22 UTC+8</span>
             <div className="flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+              <span className="w-1.5 h-1.5 rounded-full bg-slate-400"></span>
               <span className="text-white/50 tracking-wider">ENGINE: ONLINE</span>
             </div>
           </div>
         </div>
       </footer>
 
+      {/* Global advanced AI assistant (floating, bottom-left) */}
+      <Suspense fallback={null}>
+        <FloatingChatbot />
+      </Suspense>
+
       {/* Persistent Shimmering Floating Action Button / Logo for Manual Submission */}
       <div className="fixed bottom-6 right-6 z-40 select-none">
         <button
           onClick={() => setIsSubmissionOpen(true)}
-          className="bg-blue-600 hover:bg-blue-500 text-white font-bold p-3.5 sm:p-4 rounded-full shadow-2xl flex items-center justify-center cursor-pointer transition duration-300 scale-100 hover:scale-105 active:scale-95 group active-glow relative border border-white/20"
+          className="bg-slate-700 hover:bg-slate-600 text-white font-bold p-3.5 sm:p-4 rounded-full shadow-2xl flex items-center justify-center cursor-pointer transition duration-300 scale-100 hover:scale-105 active:scale-95 group active-glow relative border border-white/20"
           title="学术协同：投递开源医学新信源 (Manual Suggest Ingest)"
         >
           {/* Pulsing ring */}
-          <span className="absolute inset-0 h-full w-full rounded-full bg-blue-500 animate-ping opacity-25 group-hover:opacity-35"></span>
+          <span className="absolute inset-0 h-full w-full rounded-full bg-slate-500 animate-ping opacity-25 group-hover:opacity-35"></span>
           
           <div className="flex items-center gap-2 font-sans text-xs font-semibold tracking-wide">
-            <Sparkles className="h-4.5 w-4.5 text-amber-300 animate-pulse" />
+            <Sparkles className="h-4.5 w-4.5 text-slate-200 animate-pulse" />
             <span className="max-w-px overflow-hidden group-hover:max-w-[120px] transition-all duration-300 ease-out whitespace-nowrap opacity-0 group-hover:opacity-100 text-white pr-1">
               投递开源信源
             </span>
@@ -1120,14 +1208,14 @@ export default function App() {
       <div className="fixed bottom-22 right-6 z-40 select-none">
         <button
           onClick={() => setIsChatOpen(true)}
-          className="bg-purple-600 hover:bg-purple-500 text-white font-bold p-3.5 sm:p-4 rounded-full shadow-2xl flex items-center justify-center cursor-pointer transition duration-300 scale-100 hover:scale-105 active:scale-95 group active-glow relative border border-white/20"
+          className="bg-slate-700 hover:bg-slate-600 text-white font-bold p-3.5 sm:p-4 rounded-full shadow-2xl flex items-center justify-center cursor-pointer transition duration-300 scale-100 hover:scale-105 active:scale-95 group active-glow relative border border-white/20"
           title="医学探索：科幻智慧大脑研究助手 (MDT AI Chatbot)"
         >
           {/* Pulsing ring */}
-          <span className="absolute inset-0 h-full w-full rounded-full bg-purple-500 animate-ping opacity-25 group-hover:opacity-35"></span>
+          <span className="absolute inset-0 h-full w-full rounded-full bg-slate-500 animate-ping opacity-25 group-hover:opacity-35"></span>
           
           <div className="flex items-center gap-2 font-sans text-xs font-semibold tracking-wide font-sans">
-            <MessageSquare className="h-4.5 w-4.5 text-purple-250 animate-pulse" />
+            <MessageSquare className="h-4.5 w-4.5 text-slate-200 animate-pulse" />
             <span className="max-w-px overflow-hidden group-hover:max-w-[120px] transition-all duration-300 ease-out whitespace-nowrap opacity-0 group-hover:opacity-100 text-white pr-1">
               {t.btnAssistant}
             </span>
@@ -1136,42 +1224,48 @@ export default function App() {
       </div>
 
       {/* Manual Ingestion Popup Dialog Portal */}
-      <ManualSubmissionView 
-        isOpen={isSubmissionOpen}
-        onClose={() => setIsSubmissionOpen(false)}
-        onSuccessIngested={(newItem) => {
-          setItems(prev => [newItem, ...prev]);
-        }}
-        onUpdateWatchdogState={async () => {
-          try {
-            const dogRes = await fetch('/api/osint/watchdog');
-            const petStatus = await dogRes.json();
-            if (petStatus.status === 'ok') {
-              setWatchdog(petStatus.data);
+      <Suspense fallback={null}>
+        <ManualSubmissionView 
+          isOpen={isSubmissionOpen}
+          onClose={() => setIsSubmissionOpen(false)}
+          onSuccessIngested={(newItem) => {
+            setItems(prev => [newItem, ...prev]);
+          }}
+          onUpdateWatchdogState={async () => {
+            try {
+              const dogRes = await fetch('/api/osint/watchdog');
+              const petStatus = await dogRes.json();
+              if (petStatus.status === 'ok') {
+                setWatchdog(petStatus.data);
+              }
+            } catch (err) {
+              console.error('Failed to sync telemetry after manual ingestion', err);
             }
-          } catch (err) {
-            console.error('Failed to sync telemetry after manual ingestion', err);
-          }
-        }}
-      />
+          }}
+        />
+      </Suspense>
 
       {/* Interactive Medical OSINT Chatbot Portal */}
-      <OSINTChatView 
-        isOpen={isChatOpen}
-        onClose={() => setIsChatOpen(false)}
-        patientProfile={profile}
-        onNavigateToTab={(tab) => {
-          setActiveTab(tab);
-          setConsoleMsg('Personalization Hub: Navigated to profile section to sync clinical identifiers.');
-        }}
-        language={activeLanguage}
-      />
+      <Suspense fallback={null}>
+        <OSINTChatView 
+          isOpen={isChatOpen}
+          onClose={() => setIsChatOpen(false)}
+          patientProfile={profile}
+          onNavigateToTab={(tab) => {
+            setActiveTab(tab);
+            setConsoleMsg('Personalization Hub: Navigated to profile section to sync clinical identifiers.');
+          }}
+          language={activeLanguage}
+        />
+      </Suspense>
 
       {/* AI Elements Sandbox Modal (Full-Screen Immersive) */}
       {isAiElementsOpen && (
         <div className="fixed inset-0 z-[100] overflow-y-auto bg-black/95 backdrop-blur-xl p-4 sm:p-8 flex items-center justify-center animate-fade-in">
           <div className="w-full max-w-6xl bg-[#09090b] border border-white/10 rounded-2xl shadow-2xl p-6 relative overflow-hidden flex flex-col font-sans max-h-[95vh] overflow-y-auto">
-            <AIElementsPlayground onClose={() => setIsAiElementsOpen(false)} />
+            <Suspense fallback={null}>
+              <AIElementsPlayground onClose={() => setIsAiElementsOpen(false)} />
+            </Suspense>
           </div>
         </div>
       )}
@@ -1181,14 +1275,14 @@ export default function App() {
         <div className="fixed inset-0 z-50 overflow-y-auto bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
           <div className="w-full max-w-2xl bg-[#09090b] border border-white/10 rounded-2xl shadow-2xl relative overflow-hidden flex flex-col font-sans animate-fade-in animate-slide-in">
             {/* Ambient visual background glow details */}
-            <div className="absolute top-0 right-0 w-[160px] h-[160px] bg-emerald-500/[0.02] rounded-full blur-[80px] pointer-events-none"></div>
-            <div className="absolute bottom-0 left-0 w-[160px] h-[160px] bg-emerald-500/[0.01] rounded-full blur-[80px] pointer-events-none"></div>
+            <div className="absolute top-0 right-0 w-[160px] h-[160px] bg-slate-500/[0.02] rounded-full blur-[80px] pointer-events-none"></div>
+            <div className="absolute bottom-0 left-0 w-[160px] h-[160px] bg-slate-500/[0.01] rounded-full blur-[80px] pointer-events-none"></div>
 
             {/* Header row */}
             <div className="p-5 border-b border-white/10 flex items-center justify-between bg-zinc-950/90 relative z-10">
               <div className="flex items-center gap-2">
-                <div className="p-2 bg-gradient-to-tr from-emerald-600/20 to-emerald-800/20 rounded-xl border border-emerald-500/30">
-                  <Settings className="h-4.5 w-4.5 text-emerald-400" />
+                <div className="p-2 bg-gradient-to-tr from-slate-600/20 to-slate-800/20 rounded-xl border border-slate-500/30">
+                  <Settings className="h-4.5 w-4.5 text-slate-300" />
                 </div>
                 <div>
                   <h2 className="text-sm font-bold text-white tracking-wide">
@@ -1213,7 +1307,7 @@ export default function App() {
               {/* Lane Column 1: Model & Provider settings */}
               <div className="space-y-4 pr-0 md:pr-4 border-r-0 md:border-r border-white/5">
                 <div className="flex items-center gap-1.5 pb-2 border-b border-white/5">
-                  <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full"></div>
+                  <div className="w-1.5 h-1.5 bg-slate-400 rounded-full"></div>
                   <h3 className="font-bold text-white uppercase tracking-wider text-[11px] font-mono">
                     Lane A: LLM Provider Services
                   </h3>
@@ -1226,7 +1320,7 @@ export default function App() {
                     <select 
                       value={configProvider}
                       onChange={(e) => setConfigProvider(e.target.value)}
-                      className="w-full bg-zinc-900 border border-white/10 rounded-lg px-2.5 py-1.5 font-sans outline-none focus:border-emerald-500/50 transition cursor-pointer text-xs"
+                      className="w-full bg-zinc-900 border border-white/10 rounded-lg px-2.5 py-1.5 font-sans outline-none focus:border-slate-500/50 transition cursor-pointer text-xs"
                     >
                       <option value="siliconflow">SiliconFlow (DeepSeek, Qwen)</option>
                       <option value="dashscope">Alibaba Cloud DashScope</option>
@@ -1244,7 +1338,7 @@ export default function App() {
                         value={configApiKey}
                         onChange={(e) => setConfigApiKey(e.target.value)}
                         placeholder={`Provide ${configProvider === 'siliconflow' ? 'SiliconFlow' : configProvider} private key...`}
-                        className="w-full bg-zinc-900 border border-white/10 rounded-lg pl-2.5 pr-8 py-1.5 font-mono text-xs text-white placeholder-zinc-600 focus:border-emerald-500/50 transition focus:outline-none"
+                        className="w-full bg-zinc-900 border border-white/10 rounded-lg pl-2.5 pr-8 py-1.5 font-mono text-xs text-white placeholder-zinc-600 focus:border-slate-500/50 transition focus:outline-none"
                       />
                       <button
                         type="button"
@@ -1264,7 +1358,7 @@ export default function App() {
                       value={configBaseUrl}
                       onChange={(e) => setConfigBaseUrl(e.target.value)}
                       placeholder="e.g. https://api.siliconflow.cn/v1"
-                      className="w-full bg-zinc-900 border border-white/10 rounded-lg px-2.5 py-1.5 font-mono text-xs text-white placeholder-zinc-700 focus:border-emerald-500/50 transition focus:outline-none"
+                      className="w-full bg-zinc-900 border border-white/10 rounded-lg px-2.5 py-1.5 font-mono text-xs text-white placeholder-zinc-700 focus:border-slate-500/50 transition focus:outline-none"
                     />
                   </div>
 
@@ -1287,7 +1381,7 @@ export default function App() {
                               setConfigModel('');
                             }
                           }}
-                          className="w-full bg-[#141418] border border-white/10 rounded-lg px-2.5 py-1.5 font-sans outline-none focus:border-emerald-500/50 transition cursor-pointer text-xs text-white"
+                          className="w-full bg-[#141418] border border-white/10 rounded-lg px-2.5 py-1.5 font-sans outline-none focus:border-slate-500/50 transition cursor-pointer text-xs text-white"
                         >
                           {(PROVIDER_PRESET_MODELS[configProvider] || []).map(m => (
                             <option key={m} value={m}>{m}</option>
@@ -1301,7 +1395,7 @@ export default function App() {
                             value={configModel}
                             onChange={(e) => setConfigModel(e.target.value)}
                             placeholder="e.g. your-chosen-model-id"
-                            className="w-full bg-zinc-900 border border-white/10 rounded-lg px-2.5 py-1.5 font-mono text-xs text-white placeholder-zinc-700 focus:border-emerald-500/50 transition focus:outline-none animate-fade-in"
+                            className="w-full bg-zinc-900 border border-white/10 rounded-lg px-2.5 py-1.5 font-mono text-xs text-white placeholder-zinc-700 focus:border-slate-500/50 transition focus:outline-none animate-fade-in"
                           />
                         )}
                       </div>
@@ -1311,7 +1405,7 @@ export default function App() {
                         value={configModel}
                         onChange={(e) => setConfigModel(e.target.value)}
                         placeholder="e.g. deepseek-ai/DeepSeek-V3"
-                        className="w-full bg-zinc-900 border border-white/10 rounded-lg px-2.5 py-1.5 font-mono text-xs text-white placeholder-zinc-650 focus:border-emerald-500/50 transition focus:outline-none"
+                        className="w-full bg-zinc-900 border border-white/10 rounded-lg px-2.5 py-1.5 font-mono text-xs text-white placeholder-zinc-650 focus:border-slate-500/50 transition focus:outline-none"
                       />
                     )}
                   </div>
@@ -1321,7 +1415,7 @@ export default function App() {
               {/* Lane Column 2: Other medical, simulation, watchdog parameters */}
               <div className="space-y-4">
                 <div className="flex items-center gap-1.5 pb-2 border-b border-white/5">
-                  <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full"></div>
+                  <div className="w-1.5 h-1.5 bg-slate-400 rounded-full"></div>
                   <h3 className="font-bold text-white uppercase tracking-wider text-[11px] font-mono">
                     Lane B: Auxiliary Clinical Control
                   </h3>
@@ -1340,7 +1434,7 @@ export default function App() {
                       type="button"
                       onClick={() => setConfigSimulateOnNoKey(!configSimulateOnNoKey)}
                       className={`h-5 w-9 rounded-full relative transition shrink-0 cursor-pointer ${
-                        configSimulateOnNoKey ? 'bg-emerald-600' : 'bg-zinc-800'
+                        configSimulateOnNoKey ? 'bg-slate-600' : 'bg-zinc-800'
                       }`}
                     >
                       <span className={`h-3.5 w-3.5 rounded-full bg-white absolute top-0.75 transition-all duration-200 ${
@@ -1361,7 +1455,7 @@ export default function App() {
                       type="button"
                       onClick={() => setConfigWatchdogAutoRepair(!configWatchdogAutoRepair)}
                       className={`h-5 w-9 rounded-full relative transition shrink-0 cursor-pointer ${
-                        configWatchdogAutoRepair ? 'bg-emerald-600' : 'bg-zinc-800'
+                        configWatchdogAutoRepair ? 'bg-slate-600' : 'bg-zinc-800'
                       }`}
                     >
                       <span className={`h-3.5 w-3.5 rounded-full bg-white absolute top-0.75 transition-all duration-200 ${
@@ -1381,7 +1475,7 @@ export default function App() {
                           onClick={() => setConfigAlertSensitivity(s as any)}
                           className={`py-1.5 rounded-lg border text-[10px] uppercase font-mono font-bold transition cursor-pointer ${
                             configAlertSensitivity === s
-                              ? 'bg-emerald-600/20 border-emerald-500/40 text-emerald-300 font-semibold'
+                              ? 'bg-slate-600/20 border-slate-500/40 text-slate-300 font-semibold'
                               : 'bg-zinc-900 border-white/5 text-zinc-500 hover:bg-white/5'
                           }`}
                         >
@@ -1397,10 +1491,10 @@ export default function App() {
 
             {/* AI Elements Sandbox launcher */}
             <div className="px-6 pb-5 border-t border-white/5 pt-4 text-xs">
-              <div className="flex items-center justify-between p-3.5 bg-gradient-to-r from-emerald-950/20 via-[#0a0a0d] to-emerald-950/[0.15] border border-emerald-500/20 rounded-xl relative overflow-hidden">
+              <div className="flex items-center justify-between p-3.5 bg-gradient-to-r from-slate-950/20 via-[#0a0a0d] to-slate-950/[0.15] border border-slate-500/20 rounded-xl relative overflow-hidden">
                 <div className="space-y-1 pr-4 max-w-md">
-                  <div className="flex items-center gap-1.5 font-bold text-emerald-300 uppercase text-[10px] tracking-widest font-mono">
-                    <Cpu className="h-3.5 w-3.5 text-emerald-400 animate-pulse" />
+                  <div className="flex items-center gap-1.5 font-bold text-slate-300 uppercase text-[10px] tracking-widest font-mono">
+                    <Cpu className="h-3.5 w-3.5 text-slate-300 animate-pulse" />
                     AI Elements AI-Native Sandbox / 科学沙盒
                   </div>
                   <p className="text-[10.5px] text-zinc-400 leading-normal font-sans">
@@ -1413,9 +1507,9 @@ export default function App() {
                     setIsConfigOpen(false);
                     setIsAiElementsOpen(true);
                   }}
-                  className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold font-sans cursor-pointer flex items-center justify-center gap-1.5 active-glow shrink-0 transition"
+                  className="px-4 py-2.5 bg-slate-700 hover:bg-slate-600 text-white rounded-xl text-xs font-bold font-sans cursor-pointer flex items-center justify-center gap-1.5 active-glow shrink-0 transition"
                 >
-                  <Sparkles className="h-4 w-4 text-emerald-300" />
+                  <Sparkles className="h-4 w-4 text-slate-200" />
                   <span>启动沙盒 ➔</span>
                 </button>
               </div>
@@ -1435,7 +1529,7 @@ export default function App() {
                 </button>
                 <button
                   onClick={handleSaveGlobalConfig}
-                  className="px-4 py-1.5 bg-emerald-600 text-white hover:bg-emerald-500 border border-emerald-500/30 rounded-lg text-xs font-bold font-sans cursor-pointer flex items-center gap-1.5 active-glow font-sans"
+                  className="px-4 py-1.5 bg-slate-700 text-white hover:bg-slate-600 border border-slate-500/30 rounded-lg text-xs font-bold font-sans cursor-pointer flex items-center gap-1.5 active-glow font-sans"
                 >
                   <Save className="h-3.5 w-3.5" />
                   Save System parameters

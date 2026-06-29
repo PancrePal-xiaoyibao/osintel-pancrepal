@@ -29,6 +29,14 @@ export interface OSINTItem {
   evidenceLevel: EvidenceLevel;
   clinicalTrialId?: string; // e.g., NCT05123456
   clickable?: boolean;
+  sourceType?: 'center' | 'clinical' | 'drug' | 'trial' | 'psychology' | 'nutrition' | 'policy' | 'other';
+  topicTags?: string[];
+  contentTags?: string[];
+  freshnessMinutes?: number;
+  freshnessWindow?: '24h' | '7d' | '30d';
+  centerPriority?: boolean;
+  reviewStatus?: 'pending' | 'needs_human_review' | 'approved' | 'rejected';
+  sourceEvidence?: Array<{ title: string; url: string; note?: string }>;
 }
 
 export interface ErrorLogEntry {
@@ -89,3 +97,68 @@ export interface PatientProfile {
   lastUpdated: string;
 }
 
+/**
+ * Personalized OSINTel research types.
+ * Backing the dedicated "My" tab: PubMed papers, ClinicalTrials.gov trials,
+ * and a zero-hallucination synthesized review.
+ */
+
+export interface LiteratureItem {
+  pmid: string;
+  title: string;
+  abstract: string;
+  journal?: string;
+  year?: string;
+  doi?: string;
+  url: string; // https://pubmed.ncbi.nlm.nih.gov/<pmid>/
+  citedByCount?: number;
+  isOpenAccess?: boolean;
+}
+
+export interface ClinicalTrialItem {
+  nct: string;
+  title: string;
+  status: string; // e.g. RECRUITING
+  phase: string[];
+  sponsor?: string;
+  url: string; // https://clinicaltrials.gov/study/<nct>
+  conditions?: string[];
+  locations?: string[];
+}
+
+export interface ReviewClaim {
+  text: string;
+  citations: string[]; // e.g. ["PMID:12345", "NCT01234567"]
+  links?: string[];
+}
+
+export interface ReviewTheme {
+  name: string;
+  claims: ReviewClaim[];
+}
+
+export interface ReviewIntegrity {
+  citations_valid: number;
+  citations_invalid: number;
+  claims_dropped: number;
+  claims_uncited: number;
+  hallucination_rate: number;
+  verified: boolean;
+}
+
+export interface PersonalReview {
+  overview?: string;
+  themes: ReviewTheme[];
+  integrity: ReviewIntegrity;
+  engine: 'llm' | 'extractive';
+}
+
+/** Derived, de-identified query tokens sent to external research APIs. */
+export interface ProfileQuery {
+  gene: string; // primary English gene/mutation token, e.g. "KRAS G12D"
+  genes: string[]; // all normalized gene tokens
+  cancer: string; // fixed: "pancreatic cancer"
+  question: string; // research question
+  newsQuery: string; // free-text query for the news pipeline
+  city?: string; // optional location hint for trials
+}

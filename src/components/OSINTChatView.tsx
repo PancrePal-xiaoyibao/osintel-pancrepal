@@ -23,6 +23,12 @@ import {
 } from 'lucide-react';
 import { PatientProfile } from '../types';
 import { LanguageCode, TRANSLATIONS, LANGUAGES } from '../translations';
+import {
+  getLlmProvider,
+  getProviderDefaults,
+  getStoredActiveProvider,
+  getStoredProviderConfigs
+} from '../lib/llm-providers';
 
 interface MessageAttachment {
   id: string;
@@ -147,19 +153,12 @@ export default function OSINTChatView({
   // Sync Provider Settings from LocalStorage
   const syncProviderSettings = () => {
     try {
-      const activeP = localStorage.getItem('pancreas_ai_elements_active_provider');
-      if (activeP) {
-        setActiveProvider(activeP);
-      }
-      
-      const configsStr = localStorage.getItem('pancreas_ai_elements_configs');
-      if (configsStr) {
-        const configs = JSON.parse(configsStr);
-        const activeConfig = configs[activeP || 'siliconflow'];
-        if (activeConfig) {
-          if (activeConfig.model) setSelectedModel(activeConfig.model);
-        }
-      }
+      const activeP = getStoredActiveProvider();
+      const configs = getStoredProviderConfigs();
+      const fallback = getProviderDefaults(activeP);
+      const activeConfig = configs[activeP] || fallback;
+      setActiveProvider(activeP);
+      setSelectedModel(activeConfig.model || fallback.model);
     } catch (e) {
       console.warn("Could not retrieve localStorage LLM playground credentials", e);
     }
@@ -218,6 +217,28 @@ export default function OSINTChatView({
           time: new Date()
         }
       ]);
+    }
+  };
+
+  const handleExportConversation = () => {
+    const transcript = messages.map((msg) => {
+      const role = msg.sender === 'user' ? 'USER' : 'ASSISTANT';
+      return `[${role}] ${msg.time.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}\n${msg.text}`;
+    }).join('\n\n---\n\n');
+    const blob = new Blob([transcript], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `osint-chat-${new Date().toISOString().slice(0, 10)}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleSaveConversation = () => {
+    try {
+      localStorage.setItem('pancreas_chat_history', JSON.stringify(messages));
+    } catch (error) {
+      console.warn('Could not persist chat history', error);
     }
   };
 
@@ -446,7 +467,7 @@ export default function OSINTChatView({
         tokens.push(<em key={matchIdx} className="italic text-zinc-200">{match[3]}</em>);
       } else if (match[4]) {
         tokens.push(
-          <code key={matchIdx} className="bg-white/10 text-purple-200 px-1.5 py-0.5 rounded font-mono text-[10px] border border-white/5 mx-0.5 select-all">
+          <code key={matchIdx} className="bg-white/10 text-slate-200 px-1.5 py-0.5 rounded font-mono text-[10px] border border-white/5 mx-0.5 select-all">
             {match[4]}
           </code>
         );
@@ -472,9 +493,9 @@ export default function OSINTChatView({
               onNavigateToTab('patient_profile');
               onClose();
             }}
-            className="inline-flex items-center gap-1.5 px-3 py-1 bg-purple-500/20 text-purple-300 border border-purple-500/30 rounded-lg text-[10px] font-semibold hover:bg-purple-500/30 transition cursor-pointer"
+            className="inline-flex items-center gap-1.5 px-3 py-1 bg-white/5 text-zinc-200 border border-white/10 rounded-lg text-[10px] font-semibold hover:bg-white/10 transition cursor-pointer"
           >
-            <Sparkle className="h-3.5 w-3.5 text-purple-400" />
+            <Sparkle className="h-3.5 w-3.5 text-slate-300" />
             {t.btnVerifyFile}
           </button>
           {parts[1] && <p className="text-xs text-zinc-300 leading-relaxed font-sans mt-2">{parseInlineMarkdown(parts[1])}</p>}
@@ -492,7 +513,7 @@ export default function OSINTChatView({
         return (
           <div 
             key={blockIdx} 
-            className="my-2.5 pl-4 border-l-2 border-purple-500 bg-purple-500/5 py-2 pr-2.5 text-[11px] italic text-purple-300/80 leading-relaxed rounded-r-lg"
+            className="my-2.5 pl-4 border-l-2 border-slate-500 bg-white/5 py-2 pr-2.5 text-[11px] italic text-zinc-300 leading-relaxed rounded-r-lg"
           >
             {quoteText.split('<br/>').map((line, lineIdx) => (
               <p key={lineIdx} className={lineIdx > 0 ? "mt-1" : ""}>
@@ -505,8 +526,8 @@ export default function OSINTChatView({
 
       if (trimmed.startsWith('###')) {
         return (
-          <h3 key={blockIdx} className="text-xs font-bold uppercase tracking-wider text-purple-300 mt-4 mb-2 flex items-center gap-1.5">
-            <span className="w-1.5 h-1.5 bg-purple-400 rounded-full shrink-0"></span>
+          <h3 key={blockIdx} className="text-xs font-bold uppercase tracking-wider text-zinc-300 mt-4 mb-2 flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 bg-slate-400 rounded-full shrink-0"></span>
             {parseInlineMarkdown(trimmed.replace(/^###\s*/, ''))}
           </h3>
         );
@@ -540,7 +561,7 @@ export default function OSINTChatView({
             {lines.map((line, lineIdx) => {
               const tr = line.trim();
               let content = tr;
-              let marker = <span className="text-purple-400 shrink-0 select-none">✦</span>;
+              let marker = <span className="text-slate-400 shrink-0 select-none">✦</span>;
 
               if (tr.startsWith('*')) {
                 content = tr.replace(/^\*\s*/, '');
@@ -549,7 +570,7 @@ export default function OSINTChatView({
               } else {
                 const matchDef = tr.match(/^(\d+)\.\s*/);
                 if (matchDef) {
-                  marker = <span className="text-purple-300 font-mono text-[9px] shrink-0">{matchDef[1]}.</span>;
+                  marker = <span className="text-slate-300 font-mono text-[9px] shrink-0">{matchDef[1]}.</span>;
                   content = tr.replace(/^\d+\.\s*/, '');
                 }
               }
@@ -574,42 +595,59 @@ export default function OSINTChatView({
   };
 
   return (
-    <div className="fixed inset-0 z-50 overflow-hidden bg-black/70 backdrop-blur-xs flex justify-end">
+    <div className="fixed inset-0 z-[60] overflow-hidden bg-black/70 backdrop-blur-xs flex justify-end">
       
       {/* Sliding Dialog Box */}
       <div className="w-full max-w-lg bg-[#09090b] border-l border-white/10 shadow-2xl h-full flex flex-col relative glass animate-slide-in font-sans">
         
         {/* Animated Background Gradients */}
-        <div className="absolute top-0 right-0 w-[200px] h-[200px] bg-purple-500/[0.03] rounded-full blur-[80px] pointer-events-none"></div>
-        <div className="absolute bottom-0 left-0 w-[200px] h-[200px] bg-indigo-500/[0.02] rounded-full blur-[80px] pointer-events-none"></div>
+        <div className="absolute top-0 right-0 w-[200px] h-[200px] bg-slate-500/[0.04] rounded-full blur-[80px] pointer-events-none"></div>
+        <div className="absolute bottom-0 left-0 w-[200px] h-[200px] bg-slate-500/[0.02] rounded-full blur-[80px] pointer-events-none"></div>
 
         {/* Top Header Row */}
         <div className="p-4 border-b border-white/10 flex items-center justify-between bg-zinc-950/90 shrink-0 z-10 relative">
           <div className="flex items-center gap-2.5">
-            <div className="p-2 bg-gradient-to-tr from-purple-600/25 to-indigo-600/25 rounded-xl border border-purple-500/25 relative">
+            <div className="p-2 bg-white/5 rounded-xl border border-white/10 relative">
               <span className="absolute top-0.5 right-0.5 flex h-1.5 w-1.5">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-purple-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-purple-500"></span>
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-slate-300 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-slate-400"></span>
               </span>
-              <Bot className="h-5 w-5 text-purple-400" />
+              <Bot className="h-5 w-5 text-slate-300" />
             </div>
             <div>
               <div className="flex items-center gap-1.5 col-span-2">
                 <h2 className="text-sm font-bold text-white tracking-wide">
                   {t.chatTitle}
                 </h2>
-                <span className="text-[8px] bg-purple-500/15 text-purple-300 font-mono font-bold border border-purple-500/25 px-1 py-0.2 rounded uppercase">
+                <span className="text-[8px] bg-white/5 text-zinc-300 font-mono font-bold border border-white/10 px-1 py-0.2 rounded uppercase">
                   ACTIVE
                 </span>
               </div>
               <p className="text-[10px] text-zinc-400 flex items-center gap-1 mt-0.5">
-                <ShieldCheck className="h-3 w-3 text-emerald-500" />
+                <ShieldCheck className="h-3 w-3 text-slate-400" />
                 {t.chatDesc}
+              </p>
+              <p className="text-[9px] text-zinc-500 font-mono mt-1">
+                {getLlmProvider(activeProvider).name} · {selectedModel}
               </p>
             </div>
           </div>
           
           <div className="flex items-center gap-2">
+            <button
+              onClick={handleSaveConversation}
+              className="p-1.5 bg-zinc-900 border border-white/5 text-zinc-400 hover:text-zinc-200 rounded-lg transition cursor-pointer"
+              title="保存会话"
+            >
+              <BookOpen className="h-4 w-4" />
+            </button>
+            <button
+              onClick={handleExportConversation}
+              className="p-1.5 bg-zinc-900 border border-white/5 text-zinc-400 hover:text-zinc-200 rounded-lg transition cursor-pointer"
+              title="导出会话"
+            >
+              <FileCheck2 className="h-4 w-4" />
+            </button>
             <button 
               onClick={handleClearHistory}
               className="p-1.5 bg-zinc-900 border border-white/5 text-zinc-400 hover:text-zinc-200 rounded-lg transition cursor-pointer"
@@ -635,13 +673,13 @@ export default function OSINTChatView({
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
           className={`flex-1 overflow-y-auto p-4 sm:p-5 space-y-4 scrollbar-thin select-text z-10 relative transition ${
-            dragActive ? 'bg-purple-900/15 border-2 border-dashed border-purple-500/40 m-2 rounded-xl' : ''
+            dragActive ? 'bg-slate-900/20 border-2 border-dashed border-slate-500/40 m-2 rounded-xl' : ''
           }`}
         >
           {dragActive && (
             <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/40 text-center p-6 pointer-events-none">
-              <UploadCloud className="h-10 w-10 text-purple-400 animate-bounce mb-2" />
-              <p className="text-xs text-purple-200 font-medium">{t.chatDropMsg}</p>
+              <UploadCloud className="h-10 w-10 text-slate-300 animate-bounce mb-2" />
+              <p className="text-xs text-zinc-200 font-medium">{t.chatDropMsg}</p>
             </div>
           )}
 
@@ -653,7 +691,7 @@ export default function OSINTChatView({
               <div className={`p-1.5 rounded-lg shrink-0 border text-xs font-bold leading-none ${
                 msg.sender === 'user' 
                   ? 'bg-zinc-800 text-zinc-100 border-white/10' 
-                  : 'bg-purple-950/60 text-purple-300 border-purple-500/25'
+                  : 'bg-slate-950/70 text-slate-300 border-white/10'
               }`}>
                 {msg.sender === 'user' ? 'ME' : 'AI'}
               </div>
@@ -663,20 +701,20 @@ export default function OSINTChatView({
                 <div className={`rounded-2xl p-3.5 ${
                   msg.sender === 'user' 
                     ? 'bg-zinc-900 text-zinc-100 rounded-tr-none border border-white/5' 
-                    : 'bg-zinc-950/75 text-zinc-300 rounded-tl-none border border-purple-500/10 glass'
+                    : 'bg-zinc-950/75 text-zinc-300 rounded-tl-none border border-white/10 glass'
                 }`}>
                   
                   {/* Visual matching info */}
                   {msg.sender === 'ai' && patientProfile && !msg.id.startsWith('welcome') && (
-                    <div className="mb-2.5 pb-1.5 border-b border-purple-500/10 flex items-center justify-between text-[9px] text-purple-300 font-semibold">
+                    <div className="mb-2.5 pb-1.5 border-b border-white/10 flex items-center justify-between text-[9px] text-zinc-300 font-semibold">
                       <span className="flex items-center gap-1">
-                        <Sparkles className="h-3 w-3 text-purple-400 animate-pulse" />
-                        双 PERSPECTIVE · 临床基因脱敏计算匹配
+                        <Sparkles className="h-3 w-3 text-slate-300 animate-pulse" />
+                        Dual perspective view active
                       </span>
                     </div>
                   )}
 
-                  <div className="space-y-1.5 select-text selection:bg-purple-500/35 break-words">
+                  <div className="space-y-1.5 select-text selection:bg-slate-500/25 break-words">
                     {renderMessageContent(msg.text)}
                   </div>
 
@@ -687,7 +725,7 @@ export default function OSINTChatView({
                       <div className="flex flex-wrap gap-1.5">
                         {msg.attachments.map(att => (
                           <div key={att.id} className="flex items-center gap-1.5 bg-zinc-800 text-zinc-200 border border-white/10 rounded-md px-2 py-1 text-[10px]">
-                            <FileCheck2 className="h-3 w-3 text-purple-400" />
+                            <FileCheck2 className="h-3 w-3 text-slate-400" />
                             <span className="max-w-[120px] truncate">{att.name}</span>
                             <span className="text-zinc-500 font-mono">({att.size})</span>
                           </div>
@@ -703,19 +741,19 @@ export default function OSINTChatView({
 
                 {/* Vercel AI Elements: <Reasoning>思维链軌 */}
                 {msg.sender === 'ai' && msg.reasoning && (
-                  <div className="bg-black/50 border border-purple-950 rounded-xl overflow-hidden shadow-md">
+                  <div className="bg-black/50 border border-white/10 rounded-xl overflow-hidden shadow-md">
                     <button 
                       onClick={() => toggleReasoning(msg.id)}
-                      className="w-full text-left px-3 py-2 bg-gradient-to-r from-purple-950/20 to-zinc-950 flex items-center justify-between text-[10px] text-purple-300 font-mono hover:bg-purple-950/30 transition cursor-pointer"
+                      className="w-full text-left px-3 py-2 bg-white/5 flex items-center justify-between text-[10px] text-zinc-300 font-mono hover:bg-white/10 transition cursor-pointer"
                     >
                       <span className="flex items-center gap-1.5">
-                        <Brain className="h-3.5 w-3.5 text-purple-400 animate-pulse" />
+                        <Brain className="h-3.5 w-3.5 text-slate-300 animate-pulse" />
                         <span>{t.chatThinking} (Time: {msg.reasoningTimeMs || 840}ms)</span>
                       </span>
                       {msg.isReasoningCollapsed ? <ChevronDown className="h-3 w-3" /> : <ChevronUp className="h-3 w-3" />}
                     </button>
                     {!msg.isReasoningCollapsed && (
-                      <div className="p-3 text-[10px] text-zinc-400 font-mono bg-zinc-950 leading-relaxed whitespace-pre-wrap select-all max-h-[140px] overflow-y-auto border-t border-purple-950/40">
+                      <div className="p-3 text-[10px] text-zinc-400 font-mono bg-zinc-950 leading-relaxed whitespace-pre-wrap select-all max-h-[140px] overflow-y-auto border-t border-white/10">
                         {msg.reasoning}
                       </div>
                     )}
@@ -724,8 +762,8 @@ export default function OSINTChatView({
 
                 {/* Vercel AI Elements: <Citations> */}
                 {msg.sender === 'ai' && msg.citations && msg.citations.length > 0 && (
-                  <div className="bg-zinc-950/80 border border-purple-950/40 rounded-xl p-3 space-y-1.5">
-                    <p className="text-[9px] text-purple-400 font-bold flex items-center gap-1 font-mono uppercase tracking-wider">
+                  <div className="bg-zinc-950/80 border border-white/10 rounded-xl p-3 space-y-1.5">
+                    <p className="text-[9px] text-slate-300 font-bold flex items-center gap-1 font-mono uppercase tracking-wider">
                       <BookOpen className="h-3 w-3" />
                       OSINT Citations 临床科学证据链
                     </p>
@@ -736,14 +774,14 @@ export default function OSINTChatView({
                           href={cit.url}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="block text-[10.5px] bg-zinc-900 border border-white/5 hover:border-purple-500/20 rounded-lg p-2.5 hover:bg-purple-950/20 transition cursor-pointer group"
+                          className="block text-[10.5px] bg-zinc-900 border border-white/5 hover:border-white/15 rounded-lg p-2.5 hover:bg-white/5 transition cursor-pointer group"
                         >
-                          <div className="flex items-center justify-between font-medium text-zinc-100 group-hover:text-purple-300">
+                          <div className="flex items-center justify-between font-medium text-zinc-100 group-hover:text-slate-300">
                             <span className="truncate flex items-center gap-1.5">
-                              <span className="text-[9px] font-mono bg-purple-500/10 text-purple-400 rounded px-1.5 py-0.1">[{cit.id}]</span>
+                              <span className="text-[9px] font-mono bg-white/5 text-slate-300 rounded px-1.5 py-0.1">[{cit.id}]</span>
                               {cit.title}
                             </span>
-                            <span className="text-[8px] font-mono text-zinc-500 group-hover:text-purple-400">➔</span>
+                            <span className="text-[8px] font-mono text-zinc-500 group-hover:text-slate-300">➔</span>
                           </div>
                           <p className="text-[9.5px] text-zinc-400 line-clamp-2 mt-1 italic group-hover:text-zinc-300 font-sans">{cit.excerpt}</p>
                         </a>
@@ -758,15 +796,15 @@ export default function OSINTChatView({
           {/* AI Typing Loader anims */}
           {isTyping && (
             <div className="flex items-start gap-2.5">
-              <div className="p-1.5 rounded-lg shrink-0 border bg-purple-950/60 text-purple-300 border-purple-500/25">
+              <div className="p-1.5 rounded-lg shrink-0 border bg-slate-950/70 text-slate-300 border-white/10">
                 AI
               </div>
-              <div className="max-w-[80%] rounded-2xl p-4 bg-zinc-950/75 text-zinc-300 rounded-tl-none border border-purple-500/10 glass">
+              <div className="max-w-[80%] rounded-2xl p-4 bg-zinc-950/75 text-zinc-300 rounded-tl-none border border-white/10 glass">
                 <div className="flex items-center gap-1.5">
-                  <span className="h-1.5 w-1.5 rounded-full bg-purple-400 animate-bounce duration-300"></span>
-                  <span className="h-1.5 w-1.5 rounded-full bg-purple-400 animate-bounce [animation-delay:0.15s] duration-300"></span>
-                  <span className="h-1.5 w-1.5 rounded-full bg-purple-400 animate-bounce [animation-delay:0.3s] duration-300"></span>
-                  <span className="text-[10px] text-purple-300 ml-1 font-mono tracking-widest animate-pulse">{t.chatTyping}</span>
+                  <span className="h-1.5 w-1.5 rounded-full bg-slate-400 animate-bounce duration-300"></span>
+                  <span className="h-1.5 w-1.5 rounded-full bg-slate-400 animate-bounce [animation-delay:0.15s] duration-300"></span>
+                  <span className="h-1.5 w-1.5 rounded-full bg-slate-400 animate-bounce [animation-delay:0.3s] duration-300"></span>
+                  <span className="text-[10px] text-slate-300 ml-1 font-mono tracking-widest animate-pulse">{t.chatTyping}</span>
                 </div>
               </div>
             </div>
@@ -778,7 +816,7 @@ export default function OSINTChatView({
         {/* Suggestion row */}
         <div className="px-4 py-2 bg-zinc-950/40 border-t border-white/5 shrink-0 z-10 relative">
           <div className="flex items-center gap-1 text-[10px] text-zinc-400 font-semibold mb-1.5 font-sans">
-            <TrendingUp className="h-3.5 w-3.5 text-purple-400" />
+            <TrendingUp className="h-3.5 w-3.5 text-slate-300" />
             {t.chatSuggested}
           </div>
           <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none scroll-smooth">
@@ -787,7 +825,7 @@ export default function OSINTChatView({
                 key={idx}
                 onClick={() => handleSendMessage(topic.text)}
                 disabled={isTyping}
-                className="shrink-0 px-2 py-1 bg-zinc-900 hover:bg-purple-950/30 text-zinc-300 hover:text-purple-300 border border-white/10 hover:border-purple-500/20 rounded-lg text-[9px] font-medium font-sans cursor-pointer transition duration-150 disabled:opacity-50"
+                className="shrink-0 px-2 py-1 bg-zinc-900 hover:bg-white/5 text-zinc-300 hover:text-white border border-white/10 hover:border-white/20 rounded-lg text-[9px] font-medium font-sans cursor-pointer transition duration-150 disabled:opacity-50"
               >
                 {topic.label}
               </button>
@@ -797,9 +835,9 @@ export default function OSINTChatView({
 
         {/* Draft input attachments bar */}
         {draftAttachments.length > 0 && (
-          <div className="px-4 py-2 bg-zinc-950/90 border-t border-purple-900/20 shrink-0 z-10 relative flex flex-wrap gap-1.5">
+          <div className="px-4 py-2 bg-zinc-950/90 border-t border-white/10 shrink-0 z-10 relative flex flex-wrap gap-1.5">
             {draftAttachments.map((att) => (
-              <div key={att.id} className="flex items-center gap-1 px-2 py-1 bg-purple-950/30 border border-purple-500/20 rounded-lg text-[10px] text-purple-300 font-mono">
+              <div key={att.id} className="flex items-center gap-1 px-2 py-1 bg-white/5 border border-white/10 rounded-lg text-[10px] text-zinc-300 font-mono">
                 <FileCheck2 className="h-3 w-3" />
                 <span className="max-w-[150px] truncate">{att.name}</span>
                 <button 
@@ -818,8 +856,8 @@ export default function OSINTChatView({
           
           {/* Quick clinical files provider popup */}
           {showTemplateDropdown && (
-            <div className="absolute bottom-[72px] left-4 bg-zinc-950 border border-purple-500/30 rounded-xl p-2 w-[320px] shadow-2xl z-40 space-y-1">
-              <p className="text-[9px] text-purple-300 font-bold px-1.5 py-0.5">{t.chatAttachFile} / 病历单特征语义切片：</p>
+            <div className="absolute bottom-[72px] left-4 bg-zinc-950 border border-white/10 rounded-xl p-2 w-[320px] shadow-2xl z-40 space-y-1">
+              <p className="text-[9px] text-zinc-300 font-bold px-1.5 py-0.5">{t.chatAttachFile} / 病历单特征语义切片：</p>
               {TEMPLATE_CLINICAL_FILES.map(item => {
                 const isSelected = draftAttachments.some(df => df.id === item.id);
                 return (
@@ -827,7 +865,7 @@ export default function OSINTChatView({
                     key={item.id}
                     onClick={() => handleAttachSimulated(item)}
                     className={`w-full text-left px-2 py-1.5 rounded-lg text-[10px] flex items-center justify-between transition cursor-pointer ${
-                      isSelected ? 'bg-purple-600/20 text-purple-200 font-semibold' : 'hover:bg-white/5 text-zinc-300'
+                      isSelected ? 'bg-white/5 text-white font-semibold' : 'hover:bg-white/5 text-zinc-300'
                     }`}
                   >
                     <span>{item.name}</span>
@@ -865,7 +903,7 @@ export default function OSINTChatView({
               type="button"
               onClick={() => setShowTemplateDropdown(!showTemplateDropdown)}
               className={`p-2.5 rounded-xl cursor-pointer transition flex items-center justify-center shrink-0 border border-white/10 shadow-lg ${
-                showTemplateDropdown ? 'bg-purple-600 text-white' : 'bg-zinc-900 text-zinc-300 hover:text-white'
+                showTemplateDropdown ? 'bg-slate-700 text-white' : 'bg-zinc-900 text-zinc-300 hover:text-white'
               }`}
               title={t.chatAttachFile}
             >
@@ -878,13 +916,13 @@ export default function OSINTChatView({
               onChange={(e) => setInputText(e.target.value)}
               placeholder={isTyping ? t.chatTyping : t.chatPlaceholder}
               disabled={isTyping}
-              className="flex-1 bg-zinc-900 border border-white/10 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-purple-500/40 transition disabled:opacity-50 font-sans"
+              className="flex-1 bg-zinc-900 border border-white/10 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-slate-500/40 transition disabled:opacity-50 font-sans"
             />
             
             <button
               type="submit"
               disabled={isTyping || (!inputText.trim() && draftAttachments.length === 0)}
-              className="p-2.5 bg-purple-600 hover:bg-purple-500 text-white rounded-xl cursor-pointer transition flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed shrink-0 border border-white/10 shadow-lg"
+              className="p-2.5 bg-slate-700 hover:bg-slate-600 text-white rounded-xl cursor-pointer transition flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed shrink-0 border border-white/10 shadow-lg"
             >
               <Send className="h-4.5 w-4.5" />
             </button>

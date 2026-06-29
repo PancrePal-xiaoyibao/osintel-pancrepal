@@ -1,0 +1,16 @@
+# Progress
+
+- 2026-06-25: Added repository guidance, created docs scaffolding, and prepared the project for git initialization.
+- 2026-06-25: Initialized git and recorded an initial repository baseline commit.
+- 2026-06-25: Drafted the first autonomous-basis design spec for the AI Studio demo.
+- 2026-06-25: Wrote the first implementation plan for the autonomous basis layer.
+- 2026-06-25: Defined the first independent deployment v1 design for a single-VPS Supabase-backed system.
+- 2026-06-26: Began Supabase schema alignment work with resource hierarchy, news pipeline, and contract tests.
+- 2026-06-26: Added shared LLM provider registry, KNOWS-backed news refresh flow, Three.js globe renderer, and overlay stack cleanup.
+- 2026-06-26: Continued UI tone-down pass for the demo shell, chat overlay, and AI Elements sandbox; aligned the visual language toward slate/zinc and preserved provider and export behavior.
+- 2026-06-26: Verified `npm run lint`, `node tests/news-pipeline.test.mjs`, `node tests/news-knows-adapter.test.mjs`, and `npm run build`.
+- 2026-06-28: Designed and built the personalized OSINTel branch. Ported the lifescience-research-copilot retrieval loop to TypeScript (Europe PMC + ClinicalTrials.gov adapters, citation registry, zero-hallucination verifier with selftest), added `/api/personal/{literature,trials,feed,review,assistant}` routes reusing the multi-provider LLM proxy and news pipeline, and shipped a gated "My" tab (MyPersonalView) with five sections: personalized news windows, 90-day articles, PubMed papers, recruiting trials, and a grounded AI assistant with a zero-hallucination review generator.
+- 2026-06-28: Verified `npm run lint`, `node tests/research-pipeline.test.mjs`, and `npm run build`; smoke-tested all five `/api/personal/*` routes live (real PubMed/CT.gov data, extractive review fallback verified, news windows, assistant fallback).
+- 2026-06-28: Added three modules on the personalized branch. (1) Shared KnowS evidence search client (`src/lib/knows/*`, 6 sources, serial multi-search, anonymous fallback on 401/403) with `/api/knows/search` and `/api/knows/multi`; rebased the news adapter onto it (fixed the `results` vs `evidences` mismatch so the feed uses real KnowS data) and added a KnowS evidence panel plus assistant grounding in the My hub. (2) Global floating AI chatbot (`FloatingChatbot.tsx`) with provider/model selection incl. custom, credential config, system context, multi-session history persisted to localStorage, and collapsible reasoning; added a server-side `.env` LLM fallback to `/api/osint/chat-custom`. (3) Local username/password auth + registration (`/api/auth/login`, `/api/auth/register`) with `.env` `DEFAULT_USERNAME`/`DEFAULT_PASSWORD` and an in-app form; sessions persist and restore via localStorage.
+- 2026-06-28: Added server-side OpenAI-compatible LLM config (`LLM_API_KEY`/`LLM_BASE_URL`/`LLM_MODEL`, StepFun) used by the personalized translate/review/assistant routes and the floating chatbot; added an LLM Chinese-translation route and a translate toggle in the My hub.
+- 2026-06-28: Verified `npm run lint`, the research/knows/news/schema tests, and `npm run build`; smoke-tested KnowS, translate, review, assistant, and auth routes live.

@@ -1,16 +1,18 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;605;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-serif: "Georgia", ui-serif, serif;
+  --font-sans: "Space Grotesk", "Avenir Next", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Iowan Old Style", "Baskerville", "Times New Roman", ui-serif, serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
 }
 
 body {
   font-family: var(--font-sans);
-  background-color: #050505;
-  color: #e0e0e0;
+  background:
+    radial-gradient(circle at top, rgba(15, 23, 42, 0.72), rgba(5, 5, 7, 1) 58%),
+    #050507;
+  color: #e5e7eb;
 }
 
 /* Custom design utilities for Sophisticated Dark theme */
@@ -23,16 +25,12 @@ body {
 }
 
 .glass {
-  background: rgba(18, 18, 18, 0.8);
-  backdrop-filter: blur(12px);
+  background: rgba(10, 12, 16, 0.78);
+  backdrop-filter: blur(16px);
 }
 
 .active-glow {
-  box-shadow: 0 0 15px rgba(20, 184, 166, 0.35);
-}
-
-.active-glow-purple {
-  box-shadow: 0 0 15px rgba(168, 85, 247, 0.35);
+  box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.14), 0 12px 30px rgba(15, 23, 42, 0.18);
 }
 
 /* Custom fade effects and custom scrollbars for dashboard feeds */
@@ -44,10 +42,9 @@ body {
   background: #050505;
 }
 ::-webkit-scrollbar-thumb {
-  background: #27272a;
+  background: #30343b;
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #3f3f46;
+  background: #4b5563;
 }
-

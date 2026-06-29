@@ -27,6 +27,8 @@ interface OSINTFeedProps {
   onGenerateSummary: () => Promise<string>;
   isFetching: boolean;
   statusMessage?: string;
+  newsRefreshMode?: 'knows' | 'fallback';
+  newsWindowLabel?: '24h' | '7d' | '30d';
   onOpenSubmission?: () => void;
   searchTerm?: string;
   onSearchTermChange?: (val: string) => void;
@@ -745,6 +747,8 @@ export default function OSINTFeedView({
   onGenerateSummary, 
   isFetching, 
   statusMessage,
+  newsRefreshMode,
+  newsWindowLabel,
   onOpenSubmission,
   searchTerm,
   onSearchTermChange,
@@ -873,6 +877,13 @@ export default function OSINTFeedView({
     setTimeout(() => setIngestSuccessText(null), 5000);
   };
 
+  const formatFreshness = (minutes?: number) => {
+    if (typeof minutes !== 'number' || Number.isNaN(minutes)) return 'fresh';
+    if (minutes < 60) return `${minutes}m`;
+    if (minutes < 24 * 60) return `${Math.round(minutes / 60)}h`;
+    return `${Math.round(minutes / (24 * 60))}d`;
+  };
+
   const handleGenerateSummary = async () => {
     setIsSummarizing(true);
     setSummaryOutput('');
@@ -891,7 +902,21 @@ export default function OSINTFeedView({
     <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 animate-fade-in">
       
       {/* Search & Left Filters Bar */}
-      <div className="lg:col-span-1 bg-zinc-950/60 border border-white/10 rounded-xl p-5 space-y-6 self-start glass">
+        <div className="lg:col-span-1 bg-zinc-950/60 border border-white/10 rounded-xl p-5 space-y-6 self-start glass">
+          <div className="rounded-xl border border-white/10 bg-black/40 p-3 space-y-2">
+            <div className="flex items-center justify-between text-[10px] uppercase tracking-[0.2em] text-zinc-500 font-mono">
+              <span>Refresh Window</span>
+              <span>{newsWindowLabel || '30d'}</span>
+            </div>
+            <div className="flex items-center justify-between text-xs text-zinc-300">
+              <span className="font-medium">Source mode</span>
+              <span className={newsRefreshMode === 'knows' ? 'text-emerald-400' : 'text-amber-400'}>{newsRefreshMode === 'knows' ? 'KNOWS' : 'Fallback'}</span>
+            </div>
+            <div className="flex items-center gap-2 text-[10px] text-zinc-500">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+              5-minute refresh ready
+            </div>
+          </div>
         
         {/* Geographic Dynamic Earth & CLI Crawl Log (War-room effect) */}
         <WarRoomGlobe />
@@ -1107,9 +1132,19 @@ export default function OSINTFeedView({
                         🎯 病情契合
                       </span>
                     )}
+                    {item.centerPriority && (
+                      <span className="text-[10px] bg-emerald-500/15 text-emerald-300 font-bold border border-emerald-500/20 px-2 py-0.5 rounded">
+                        Center-first
+                      </span>
+                    )}
+                    {item.reviewStatus && item.reviewStatus !== 'approved' && (
+                      <span className="text-[10px] bg-amber-500/15 text-amber-300 font-bold border border-amber-500/20 px-2 py-0.5 rounded">
+                        Review
+                      </span>
+                    )}
                     <span className="text-[10px] text-zinc-500 ml-auto flex items-center gap-1 font-mono">
                       <Calendar className="h-3 w-3" />
-                      {new Date(item.publishedAt).toLocaleDateString('zh-CN', {month: '2-digit', day: '2-digit', hour: '2-digit', minute:'2-digit'})}
+                      {formatFreshness(item.freshnessMinutes)}
                     </span>
                   </div>
 
@@ -1126,9 +1161,14 @@ export default function OSINTFeedView({
                   {/* Entities tags & Importance */}
                   <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-3">
                     <div className="flex flex-wrap gap-1.5 max-w-[80%]">
-                      {item.entities.map((ent, i) => (
+                      {(item.topicTags || item.entities).slice(0, 4).map((ent, i) => (
                         <span key={i} className="text-[10px] bg-black text-zinc-400 px-2 py-0.5 rounded font-medium border border-white/5">
                           {ent}
+                        </span>
+                      ))}
+                      {item.contentTags?.slice(0, 2).map((tag, i) => (
+                        <span key={`content-${i}`} className="text-[10px] bg-zinc-900 text-zinc-500 px-2 py-0.5 rounded font-medium border border-white/5">
+                          {tag}
                         </span>
                       ))}
                       {item.clinicalTrialId && (
@@ -1154,7 +1194,7 @@ export default function OSINTFeedView({
 
       {/* Intelligence Detail Drawer Overlay Modal */}
       {selectedItem && (
-        <div className="fixed inset-0 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 z-[70] animate-fade-in">
           <div className="bg-zinc-950 border border-white/10 rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl relative">
             {/* Modal Header */}
             <div className="p-5 border-b border-white/10 bg-zinc-900/40 flex justify-between items-start gap-4 glass">
@@ -1274,7 +1314,7 @@ export default function OSINTFeedView({
 
       {/* Daily Summary Generated Modal */}
       {showSummaryModal && (
-        <div className="fixed inset-0 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 z-[70] animate-fade-in">
           <div className="bg-zinc-950 border border-white/10 rounded-2xl w-full max-w-3xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh] relative">
             
             <div className="p-5 border-b border-white/10 bg-zinc-900/40 flex justify-between items-center shrink-0 glass">
