@@ -563,7 +563,7 @@ export default function App() {
       </div>
 
       {/* Main Header Wrapper */}
-      <header className="border-b border-white/10 px-4 sm:px-8 py-4 flex flex-col md:flex-row justify-between md:items-center gap-4 glass z-10 sticky top-0 backdrop-blur-md">
+      <header className="border-b border-white/10 px-4 sm:px-8 py-4 flex flex-col md:flex-row justify-between md:items-center gap-4 glass z-40 sticky top-0 backdrop-blur-md">
         <div className="max-w-7xl w-full mx-auto flex flex-col sm:flex-row gap-4 justify-between items-start sm:items-center">
           <div className="flex items-center gap-4">
             <div className="p-1.5 bg-slate-500/10 border border-slate-500/30 rounded-xl shrink-0 flex items-center justify-center shadow-lg shadow-black/20 animate-pulse" title="小胰宝 AI 助手 Mascot">
