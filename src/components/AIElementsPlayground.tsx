@@ -26,82 +26,22 @@ import {
   CloudLightning,
   Workflow
 } from 'lucide-react';
+import {
+  LLM_PROVIDER_IDS,
+  PROVIDER_STORAGE_KEYS,
+  getLlmProvider,
+  getProviderDefaults,
+  getStoredActiveProvider,
+  getStoredProviderConfigs,
+  StoredProviderConfig
+} from '../lib/llm-providers';
 
-interface AIProvider {
-  id: string;
-  name: string;
-  defaultBaseUrl: string;
-  defaultModels: string[];
-  placeholderKey: string;
-  iconColor: string;
-}
-
-const PROVIDERS: Record<string, AIProvider> = {
-  gemini: {
-    id: 'gemini',
-    name: 'Google Gemini',
-    defaultBaseUrl: 'https://generativelanguage.googleapis.com',
-    defaultModels: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.0-flash', 'gemini-2.0-pro-exp'],
-    placeholderKey: 'AIzaSy...',
-    iconColor: 'text-blue-400'
-  },
-  openai: {
-    id: 'openai',
-    name: 'OpenAI',
-    defaultBaseUrl: 'https://api.openai.com/v1',
-    defaultModels: ['o3-mini', 'o1', 'o1-mini', 'gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo'],
-    placeholderKey: 'sk-proj-...',
-    iconColor: 'text-emerald-400'
-  },
-  openrouter: {
-    id: 'openrouter',
-    name: 'OpenRouter',
-    defaultBaseUrl: 'https://openrouter.ai/api/v1',
-    defaultModels: ['deepseek/deepseek-r1', 'meta-llama/llama-3.3-70b-instruct', 'anthropic/claude-3.5-sonnet', 'google/gemini-2.5-pro', 'google/gemini-2.5-flash'],
-    placeholderKey: 'sk-or-...',
-    iconColor: 'text-indigo-400'
-  },
-  siliconflow: {
-    id: 'siliconflow',
-    name: 'SiliconFlow (硅基流动)',
-    defaultBaseUrl: 'https://api.siliconflow.cn/v1',
-    defaultModels: ['deepseek-ai/DeepSeek-V3', 'deepseek-ai/DeepSeek-R1', 'deepseek-ai/DeepSeek-R1-Distill-Qwen-32B', 'deepseek-ai/DeepSeek-R1-Distill-Llama-8B', 'Qwen/Qwen2.5-72B-Instruct', 'Qwen/Qwen2.5-Coder-32B-Instruct', 'THUDM/glm-4-9b-chat'],
-    placeholderKey: 'sk-sf-...',
-    iconColor: 'text-purple-400'
-  },
-  fireworks: {
-    id: 'fireworks',
-    name: 'Fireworks AI',
-    defaultBaseUrl: 'https://api.fireworks.ai/inference/v1',
-    defaultModels: ['accounts/fireworks/models/deepseek-v3', 'accounts/fireworks/models/deepseek-r1', 'accounts/fireworks/models/llama-v3p3-70b-instruct', 'accounts/fireworks/models/qwen2p5-72b-instruct'],
-    placeholderKey: 'fw_...',
-    iconColor: 'text-pink-400'
-  },
-  dashscope: {
-    id: 'dashscope',
-    name: 'Aliyun DashScope (通义千问)',
-    defaultBaseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    defaultModels: ['qwen-max', 'qwen-max-latest', 'qwen-plus', 'qwen-turbo', 'qwen2.5-72b-instruct', 'qwen2.5-14b-instruct', 'qwen-vl-max-latest'],
-    placeholderKey: 'sk-ali-...',
-    iconColor: 'text-amber-400'
-  },
-  stepfun: {
-    id: 'stepfun',
-    name: 'StepFun (阶跃星辰)',
-    defaultBaseUrl: 'https://api.stepfun.com/v1',
-    defaultModels: ['step-1-max', 'step-1.5-v-pro', 'step-1-flash', 'step-1-pro', 'step-1.5-pro'],
-    placeholderKey: 'key_...',
-    iconColor: 'text-red-400'
-  },
-  openai_compatible: {
-    id: 'openai_compatible',
-    name: 'OpenAI Compatible (自定义模型)',
-    defaultBaseUrl: 'https://your-custom-endpoint.com/v1',
-    defaultModels: ['custom-model-v1', 'deepseek-r1', 'llama3'],
-    placeholderKey: 'api-key-...',
-    iconColor: 'text-zinc-400'
-  }
-};
+const PROVIDERS = Object.fromEntries(
+  LLM_PROVIDER_IDS.map((id) => {
+    const provider = getLlmProvider(id);
+    return [id, provider];
+  })
+);
 
 interface MessageAttachment {
   id: string;
@@ -135,7 +75,7 @@ export default function AIElementsPlayground({ onClose }: { onClose?: () => void
   const [isSaving, setIsSaving] = useState<boolean>(false);
   
   // Loaded Configurations per Provider (persisted in local state / localStorage)
-  const [providerConfigs, setProviderConfigs] = useState<Record<string, { apiKey: string; baseUrl: string; model: string }>>({});
+  const [providerConfigs, setProviderConfigs] = useState<Record<string, StoredProviderConfig>>({});
 
   // Chat conversation states
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -156,36 +96,15 @@ export default function AIElementsPlayground({ onClose }: { onClose?: () => void
   // On mount, load configurations from LocalStorage
   useEffect(() => {
     try {
-      const stored = localStorage.getItem('pancreas_ai_elements_configs');
-      const activeP = localStorage.getItem('pancreas_ai_elements_active_provider');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        setProviderConfigs(parsed);
-        const p = activeP || 'siliconflow';
-        setActiveProvider(p);
-        
-        const config = parsed[p];
-        if (config) {
-          setApiKey(config.apiKey || '');
-          setBaseUrl(config.baseUrl || PROVIDERS[p].defaultBaseUrl);
-          setSelectedModel(config.model || PROVIDERS[p].defaultModels[0]);
-          setIsActiveConfigSet(!!config.apiKey);
-        }
-      } else {
-        // Safe default structure
-        const initialConfigs: Record<string, { apiKey: string; baseUrl: string; model: string }> = {};
-        Object.keys(PROVIDERS).forEach(k => {
-          initialConfigs[k] = {
-            apiKey: '',
-            baseUrl: PROVIDERS[k].defaultBaseUrl,
-            model: PROVIDERS[k].defaultModels[0]
-          };
-        });
-        setProviderConfigs(initialConfigs);
-        // Default base values for siliconflow
-        setBaseUrl(PROVIDERS.siliconflow.defaultBaseUrl);
-        setSelectedModel(PROVIDERS.siliconflow.defaultModels[0]);
-      }
+      const parsed = getStoredProviderConfigs();
+      const activeP = getStoredActiveProvider();
+      const fallback = getProviderDefaults(activeP);
+      setProviderConfigs(parsed);
+      setActiveProvider(activeP);
+      setApiKey(parsed[activeP]?.apiKey || fallback.apiKey);
+      setBaseUrl(parsed[activeP]?.baseUrl || fallback.baseUrl);
+      setSelectedModel(parsed[activeP]?.model || fallback.model);
+      setIsActiveConfigSet(!!parsed[activeP]?.apiKey);
     } catch (err) {
       console.warn("Could not read LocalStorage configs:", err);
     }
@@ -195,20 +114,16 @@ export default function AIElementsPlayground({ onClose }: { onClose?: () => void
       {
         id: 'init',
         sender: 'ai',
-        text: `### 🤖 Live AI-Native Elements Playground & Config Hub
+        text: `### AI Elements Playground
 
-欢迎使用 **Pancreas OSINT** 专为大模型研究、医疗文献分析定制的 AI Native UI 交互沙盒（以 Vercel AI Elements 规范重构构建）。
+这是一个更轻量的多提供商聊天沙盒。
 
-#### 💡 本沙盒全方位实现了以下 AI-Native 拟合组件：
-1.  **AI Elements \`<Chat>\` & \`<Message>\`**：沉浸式多轮会话容器，支持 Markdown 渲染及自定义代码高亮。
-2.  **AI Elements 行内文献引用评分 \`<Citations>\`**：仿照学术出版物将科学证据直插行内，鼠标悬停即刻检阅来源。
-3.  **AI Elements \`<Reasoning>\`（深度思维链链轨）**：支持满血大模型（如 DeepSeek-R1、o1 等）输出推理过程，包括思考时段用时追踪。
-4.  **AI Elements 复合附件上传 \`<Attachment>\`**：支持直接拖拽医疗病理 PDF、化验单，并在大模型对话前进行语义级切片绑定。
-5.  **AI Elements 动态多提供商 \`<ModelSelector>\`**：支持接入各大提供商 API 密钥，实时从前端呼起真实的推理任务！
-
-*如果您当前尚未配置 API 密钥，点击左侧配置面板或输入任意提问，沙盒将自动通过内置的【高保真临床模拟器】输出带完整思维链和文献引用的标准示范。*`,
+#### 能力
+1. 读取并保存同一套 provider 配置。
+2. 预览聊天、reasoning、citations 和附件。
+3. 在没有密钥时保持本地模拟输出。`,
         time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
-        reasoning: "正在载入 AI-Native 临床沙盒系统... 初始化 UI Primitives 与 Citations 行内解析。检测本地 LocalStorage 存储状态。建立对 SiliconFlow、DeepSeek-R1 等模型的预置列表。载入成功！",
+        reasoning: "加载 provider 配置与本地预览数据。",
         reasoningTimeMs: 450,
         isReasoningCollapsed: true,
         citations: [
@@ -222,15 +137,12 @@ export default function AIElementsPlayground({ onClose }: { onClose?: () => void
   // When active provider changes, load correct sub-config
   const handleProviderChange = (providerId: string) => {
     setActiveProvider(providerId);
-    const existing = providerConfigs[providerId] || {
-      apiKey: '',
-      baseUrl: PROVIDERS[providerId].defaultBaseUrl,
-      model: PROVIDERS[providerId].defaultModels[0]
-    };
+    const provider = getLlmProvider(providerId);
+    const existing = providerConfigs[providerId] || getProviderDefaults(providerId);
     
     setApiKey(existing.apiKey || '');
-    setBaseUrl(existing.baseUrl || PROVIDERS[providerId].defaultBaseUrl);
-    setSelectedModel(existing.model || PROVIDERS[providerId].defaultModels[0]);
+    setBaseUrl(existing.baseUrl || provider.defaultBaseUrl);
+    setSelectedModel(existing.model || provider.defaultModels[0]);
     setIsActiveConfigSet(!!existing.apiKey);
     setStatusMessage('');
   };
@@ -251,13 +163,13 @@ export default function AIElementsPlayground({ onClose }: { onClose?: () => void
     setProviderConfigs(updated);
     
     try {
-      localStorage.setItem('pancreas_ai_elements_configs', JSON.stringify(updated));
-      localStorage.setItem('pancreas_ai_elements_active_provider', activeProvider);
+      localStorage.setItem(PROVIDER_STORAGE_KEYS.configs, JSON.stringify(updated));
+      localStorage.setItem(PROVIDER_STORAGE_KEYS.activeProvider, activeProvider);
       
       setTimeout(() => {
         setIsSaving(false);
         setIsActiveConfigSet(!!apiKey);
-        setStatusMessage(`成功激活：[${PROVIDERS[activeProvider].name}] 配置已更新。当前模型 [${finalModel}]。已在前端注入实时网关代理！`);
+        setStatusMessage(`已激活 ${getLlmProvider(activeProvider).name}，当前模型 ${finalModel || 'auto'}。`);
       }, 500);
     } catch (err) {
       setIsSaving(false);
@@ -267,8 +179,9 @@ export default function AIElementsPlayground({ onClose }: { onClose?: () => void
 
   const handleClearConfig = () => {
     setApiKey('');
-    setBaseUrl(PROVIDERS[activeProvider].defaultBaseUrl);
-    setSelectedModel(PROVIDERS[activeProvider].defaultModels[0]);
+    const provider = getLlmProvider(activeProvider);
+    setBaseUrl(provider.defaultBaseUrl);
+    setSelectedModel(provider.defaultModels[0]);
     setCustomModelInput('');
     setIsActiveConfigSet(false);
 
@@ -276,14 +189,14 @@ export default function AIElementsPlayground({ onClose }: { onClose?: () => void
       ...providerConfigs,
       [activeProvider]: {
         apiKey: '',
-        baseUrl: PROVIDERS[activeProvider].defaultBaseUrl,
-        model: PROVIDERS[activeProvider].defaultModels[0]
+        baseUrl: provider.defaultBaseUrl,
+        model: provider.defaultModels[0]
       }
     };
     setProviderConfigs(updated);
     try {
-      localStorage.setItem('pancreas_ai_elements_configs', JSON.stringify(updated));
-      setStatusMessage(`已清空 [${PROVIDERS[activeProvider].name}] 相关的 API 密钥与特设参数配置。重置回开发套件模拟状态。`);
+      localStorage.setItem(PROVIDER_STORAGE_KEYS.configs, JSON.stringify(updated));
+      setStatusMessage(`已清空 ${provider.name} 的本地配置。`);
     } catch (_) {}
   };
 
@@ -456,13 +369,13 @@ export default function AIElementsPlayground({ onClose }: { onClose?: () => void
     <div className="space-y-6">
       
       {/* Upper Status summary banner */}
-      <div className="bg-gradient-to-r from-purple-950/40 via-zinc-950 to-indigo-950/45 border border-white/10 rounded-2xl p-5 relative overflow-hidden glass shadow-xl shadow-black/30">
-        <div className="absolute top-0 right-0 w-[150px] h-[150px] bg-purple-500/[0.03] rounded-full blur-[50px] pointer-events-none"></div>
+      <div className="bg-gradient-to-r from-slate-950 via-zinc-950 to-slate-900 border border-white/10 rounded-2xl p-5 relative overflow-hidden glass shadow-xl shadow-black/30">
+          <div className="absolute top-0 right-0 w-[150px] h-[150px] bg-slate-500/[0.04] rounded-full blur-[50px] pointer-events-none"></div>
         {onClose && (
           <button 
             type="button"
             onClick={onClose}
-            className="absolute top-4 right-4 px-3 py-1.5 bg-purple-900/30 hover:bg-purple-900/60 text-purple-300 hover:text-white border border-purple-500/20 rounded-xl transition cursor-pointer z-50 flex items-center gap-1.5 text-[10px] font-sans font-bold"
+            className="absolute top-4 right-4 px-3 py-1.5 bg-white/5 hover:bg-white/10 text-zinc-300 hover:text-white border border-white/10 rounded-xl transition cursor-pointer z-50 flex items-center gap-1.5 text-[10px] font-sans font-bold"
           >
             <span>✕ 关闭沙盒 / Close Sandbox</span>
           </button>
@@ -470,29 +383,29 @@ export default function AIElementsPlayground({ onClose }: { onClose?: () => void
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="space-y-1.5">
             <div className="flex items-center gap-2">
-              <span className="p-1 px-1.5 bg-purple-500/10 border border-purple-500/30 text-purple-400 font-mono text-[9px] font-bold rounded">
+              <span className="p-1 px-1.5 bg-white/5 border border-white/10 text-zinc-300 font-mono text-[9px] font-bold rounded">
                 AI ELEMENTS PRimitives
               </span>
-              <span className="h-1.5 w-1.5 rounded-full bg-purple-400 animate-pulse"></span>
+              <span className="h-1.5 w-1.5 rounded-full bg-slate-400 animate-pulse"></span>
               <span className="text-zinc-400 text-[10px] font-mono">WORKSPACE ID: QW-175611</span>
             </div>
             <h1 className="text-lg md:text-xl font-bold text-white tracking-tight font-sans flex items-center gap-2">
-              <Cpu className="h-5.5 w-5.5 text-purple-400" />
+              <Cpu className="h-5.5 w-5.5 text-slate-300" />
               AI-Native 多供应商模型配置与沙盒
             </h1>
             <p className="text-xs text-zinc-400 max-w-3xl leading-relaxed font-sans">
-              本控制中心完美实现 Vercel AI SDK 与 AI Elements 轻量组件（Chat, Messaging with citations, Attachments, ModelSelectors, Reasoning Process）。支持配置各种 API 密钥及自主设定兼容大模型。
+              本控制中心用于统一 provider 配置、聊天预览、reasoning、citations 和附件流。
             </p>
           </div>
 
           <div className="flex items-center gap-2 shrink-0 bg-black/40 border border-white/5 px-4 py-2.5 rounded-xl font-mono text-[11px] self-start md:self-center">
-            <Globe className="h-4 w-4 text-purple-400 shrink-0" />
+            <Globe className="h-4 w-4 text-slate-300 shrink-0" />
             <div className="space-y-0.5">
               <div className="text-zinc-500">网关链路模式</div>
               <div className="text-white font-bold flex items-center gap-1">
                 {isActiveConfigSet ? (
                   <>
-                    <CloudLightning className="h-3 w-3 text-purple-400" />
+                    <CloudLightning className="h-3 w-3 text-slate-300" />
                     已激活: {PROVIDERS[activeProvider].name}
                   </>
                 ) : (
@@ -515,7 +428,7 @@ export default function AIElementsPlayground({ onClose }: { onClose?: () => void
           
           <div className="p-4 border-b border-white/10 bg-zinc-950/90 flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <Settings className="h-4.5 w-4.5 text-purple-400" />
+              <Settings className="h-4.5 w-4.5 text-slate-300" />
               <h2 className="text-xs font-bold text-white uppercase tracking-wider">
                 多通道服务提供商配置
               </h2>
@@ -536,7 +449,7 @@ export default function AIElementsPlayground({ onClose }: { onClose?: () => void
                 <select
                   value={activeProvider}
                   onChange={(e) => handleProviderChange(e.target.value)}
-                  className="w-full bg-zinc-900 border border-white/10 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-purple-500/40 cursor-pointer"
+                  className="w-full bg-zinc-900 border border-white/10 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-slate-500/40 cursor-pointer"
                 >
                   {Object.values(PROVIDERS).map((p) => (
                     <option key={p.id} value={p.id}>
@@ -560,7 +473,7 @@ export default function AIElementsPlayground({ onClose }: { onClose?: () => void
                 value={baseUrl}
                 onChange={(e) => setBaseUrl(e.target.value)}
                 placeholder="https://api.yourprovider.com/v1"
-                className="w-full bg-zinc-900 border border-white/10 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-purple-500/40 font-mono"
+                className="w-full bg-zinc-900 border border-white/10 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-slate-500/40 font-mono"
               />
             </div>
 
@@ -573,7 +486,7 @@ export default function AIElementsPlayground({ onClose }: { onClose?: () => void
                 <button
                   type="button"
                   onClick={() => setShowApiKey(!showApiKey)}
-                  className="text-[10px] text-purple-400 hover:text-purple-300 underline font-semibold cursor-pointer"
+                  className="text-[10px] text-slate-300 hover:text-white underline font-semibold cursor-pointer"
                 >
                   {showApiKey ? '隐藏秘钥' : '明文显示'}
                 </button>
@@ -584,7 +497,7 @@ export default function AIElementsPlayground({ onClose }: { onClose?: () => void
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
                   placeholder={`配置 ${PROVIDERS[activeProvider].name} 的 API Key (例: ${PROVIDERS[activeProvider].placeholderKey})`}
-                  className="w-full bg-zinc-900 border border-white/10 rounded-xl pl-3.5 pr-20 py-2.5 text-xs text-white placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-purple-500/40 font-mono"
+                  className="w-full bg-zinc-900 border border-white/10 rounded-xl pl-3.5 pr-20 py-2.5 text-xs text-white placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-slate-500/40 font-mono"
                 />
                 <span className="absolute right-2 top-2.5 text-[9px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-500 select-none font-mono">
                   AES-256
@@ -603,7 +516,7 @@ export default function AIElementsPlayground({ onClose }: { onClose?: () => void
               <select
                 value={selectedModel}
                 onChange={(e) => setSelectedModel(e.target.value)}
-                className="w-full bg-zinc-900 border border-white/10 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-purple-500/40 cursor-pointer font-sans"
+                  className="w-full bg-zinc-900 border border-white/10 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-slate-500/40 cursor-pointer font-sans"
               >
                 <option value="auto">🌐 Auto-Select (模型智能自动选择)</option>
                 {PROVIDERS[activeProvider].defaultModels.map((m) => (
@@ -621,7 +534,7 @@ export default function AIElementsPlayground({ onClose }: { onClose?: () => void
                     value={customModelInput}
                     onChange={(e) => setCustomModelInput(e.target.value)}
                     placeholder="请输入大模型完整标识符 (e.g. gpt-4-turbo, deepseek-r1:70b)"
-                    className="w-full bg-zinc-900 border border-white/10 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-purple-500/40 font-mono"
+                    className="w-full bg-zinc-900 border border-white/10 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-slate-500/40 font-mono"
                   />
                 </div>
               )}
@@ -641,7 +554,7 @@ export default function AIElementsPlayground({ onClose }: { onClose?: () => void
                 type="button"
                 onClick={handleSaveConfig}
                 disabled={isSaving}
-                className="flex-1 py-2.5 bg-purple-600 hover:bg-purple-500 text-white rounded-xl text-xs font-semibold cursor-pointer transition duration-150 flex items-center justify-center gap-1 border border-white/10 shadow-lg"
+                className="flex-1 py-2.5 bg-slate-700 hover:bg-slate-600 text-white rounded-xl text-xs font-semibold cursor-pointer transition duration-150 flex items-center justify-center gap-1 border border-white/10 shadow-lg"
               >
                 {isSaving ? (
                   <span className="h-4 w-4 rounded-full border-2 border-white/20 border-t-white animate-spin"></span>
@@ -656,8 +569,8 @@ export default function AIElementsPlayground({ onClose }: { onClose?: () => void
 
             {/* Status Feedback Log block */}
             {statusMessage && (
-              <div className="p-3 bg-purple-500/10 border border-purple-500/20 rounded-xl text-purple-300 text-[10px] leading-relaxed flex items-start gap-1.5 font-mono">
-                <AlertCircle className="h-3.5 w-3.5 shrink-0 text-purple-400" />
+              <div className="p-3 bg-white/5 border border-white/10 rounded-xl text-zinc-300 text-[10px] leading-relaxed flex items-start gap-1.5 font-mono">
+                <AlertCircle className="h-3.5 w-3.5 shrink-0 text-slate-300" />
                 <div className="flex-1 break-words">{statusMessage}</div>
               </div>
             )}
@@ -674,7 +587,7 @@ export default function AIElementsPlayground({ onClose }: { onClose?: () => void
                     handleSendMessage("针对 KRAS G12D 突变靶点治疗，MRTX1133 的药理机制、临床试验缓解率如何？是否有联合用药方向？");
                     setStatusMessage("已向沙盒发送测试指令：探讨胰脏癌 KRAS G12D 靶点。");
                   }}
-                  className="p-2.5 bg-zinc-900/60 hover:bg-purple-950/20 border border-white/5 hover:border-purple-500/20 rounded-xl text-[10px] text-zinc-400 hover:text-purple-300 transition text-left cursor-pointer"
+                    className="p-2.5 bg-zinc-900/60 hover:bg-white/5 border border-white/5 hover:border-white/15 rounded-xl text-[10px] text-zinc-400 hover:text-white transition text-left cursor-pointer"
                 >
                   🧬 探讨 KRAS G12D
                 </button>
@@ -684,7 +597,7 @@ export default function AIElementsPlayground({ onClose }: { onClose?: () => void
                     handleSendMessage("胰腺癌术后由于胰腺外分泌障碍出现严重营养不良与腹泻，如何随餐服用胰酶PERT？标准用量是多少？");
                     setStatusMessage("已向沙盒发送测试指令：探讨胰酶替代疗法 PERT 随餐实操。");
                   }}
-                  className="p-2.5 bg-zinc-900/60 hover:bg-purple-950/20 border border-white/5 hover:border-purple-500/20 rounded-xl text-[10px] text-zinc-400 hover:text-purple-300 transition text-left cursor-pointer"
+                    className="p-2.5 bg-zinc-900/60 hover:bg-white/5 border border-white/5 hover:border-white/15 rounded-xl text-[10px] text-zinc-400 hover:text-white transition text-left cursor-pointer"
                 >
                   💊 营养摄入 PERT 用量
                 </button>
@@ -698,20 +611,20 @@ export default function AIElementsPlayground({ onClose }: { onClose?: () => void
         <div className="lg:col-span-7 bg-[#09090b] border border-white/10 rounded-2xl overflow-hidden glass shadow-xl shadow-black/40 flex flex-col h-[650px] relative font-sans">
           
           {/* Active AI Elements Component Wrapper Badge */}
-          <div className="absolute top-0 right-0 w-[150px] h-[150px] bg-purple-500/[0.02] rounded-full blur-[50px] pointer-events-none"></div>
+          <div className="absolute top-0 right-0 w-[150px] h-[150px] bg-slate-500/[0.04] rounded-full blur-[50px] pointer-events-none"></div>
 
           {/* Top dynamic header containing ModelSelector mock */}
           <div className="p-4 border-b border-white/10 bg-zinc-950/95 flex items-center justify-between shrink-0 z-10 relative">
             <div className="flex items-center gap-2">
-              <div className="p-1 px-1.5 bg-purple-500/10 border border-purple-500/20 rounded-lg text-purple-300 flex items-center gap-1.5">
-                <Brain className="h-3.5 w-3.5 text-purple-400 animate-pulse" />
+              <div className="p-1 px-1.5 bg-slate-500/10 border border-white/10 rounded-lg text-zinc-300 flex items-center gap-1.5">
+                <Brain className="h-3.5 w-3.5 text-slate-300 animate-pulse" />
                 <span className="text-[10px] font-bold font-mono tracking-wide">
                   &lt;ModelSelector&gt;
                 </span>
               </div>
               <span className="text-zinc-650 font-mono text-[9px] select-none">|</span>
               <div className="flex items-center gap-1.5">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-ping"></span>
+                <span className="h-1.5 w-1.5 rounded-full bg-slate-400 animate-ping"></span>
                 <span className="text-xs font-semibold text-white font-mono">
                   {selectedModel === 'custom' ? customModelInput || 'custom-model' : selectedModel || 'mock-clinical-engine'}
                 </span>
@@ -735,9 +648,9 @@ export default function AIElementsPlayground({ onClose }: { onClose?: () => void
                 
                 {/* Avatar identifier */}
                 <div className={`p-1.5 rounded-lg border text-[9px] font-bold tracking-wider shrink-0 font-mono select-none ${
-                  m.sender === 'user' 
-                    ? 'bg-zinc-800 text-zinc-100 border-white/10' 
-                    : 'bg-purple-950/60 text-purple-300 border-purple-500/25'
+                  m.sender === 'user'
+                    ? 'bg-zinc-800 text-zinc-100 border-white/10'
+                    : 'bg-slate-950/70 text-slate-300 border-white/10'
                 }`}>
                   {m.sender === 'user' ? 'USER' : 'OSINT'}
                 </div>
@@ -746,7 +659,7 @@ export default function AIElementsPlayground({ onClose }: { onClose?: () => void
                 <div className={`max-w-[85%] rounded-2xl p-4 relative ${
                   m.sender === 'user'
                     ? 'bg-zinc-900 border border-white/5 rounded-tr-none text-zinc-100'
-                    : 'bg-zinc-950/80 border border-purple-500/10 rounded-tl-none text-zinc-300 glass shadow-md shadow-black/20'
+                    : 'bg-zinc-950/80 border border-slate-500/10 rounded-tl-none text-zinc-300 glass shadow-md shadow-black/20'
                 }`}>
                   
                   {/* Model & Token details for AI response */}
@@ -761,7 +674,7 @@ export default function AIElementsPlayground({ onClose }: { onClose?: () => void
                   {m.attachments && m.attachments.length > 0 && (
                     <div className="mb-2 p-2 bg-zinc-900/60 border border-white/5 rounded-xl space-y-1">
                       <div className="text-[8px] uppercase font-bold text-zinc-500 flex items-center gap-1">
-                        <Paperclip className="h-3 w-3 text-purple-400" />
+                        <Paperclip className="h-3 w-3 text-slate-400" />
                         &lt;Attachment&gt; elements attached
                       </div>
                       <div className="flex flex-wrap gap-1.5">
@@ -770,7 +683,7 @@ export default function AIElementsPlayground({ onClose }: { onClose?: () => void
                             key={file.id}
                             className="bg-zinc-950 px-2 py-1 rounded-lg border border-white/10 flex items-center gap-1.5 text-[10px] font-mono text-zinc-300 select-all"
                           >
-                            <FileText className="h-3 w-3 text-purple-400 shrink-0" />
+                            <FileText className="h-3 w-3 text-slate-400 shrink-0" />
                             <span className="truncate max-w-[120px]">{file.name}</span>
                             <span className="text-[8px] text-zinc-500">({file.size})</span>
                           </div>
@@ -781,10 +694,10 @@ export default function AIElementsPlayground({ onClose }: { onClose?: () => void
 
                   {/* Thinking/Reasoning block replicating DeepSeek-R1 style Vercel AI Elements */}
                   {m.sender === 'ai' && m.reasoning && (
-                    <div className="my-3 bg-zinc-950/90 border border-purple-500/25 rounded-xl overflow-hidden text-[11px] font-mono select-text">
-                      <div className="bg-purple-950/20 px-3 py-2 border-b border-white/5 flex items-center justify-between text-purple-300 text-[10px] font-bold">
+                    <div className="my-3 bg-zinc-950/90 border border-white/10 rounded-xl overflow-hidden text-[11px] font-mono select-text">
+                      <div className="bg-white/5 px-3 py-2 border-b border-white/5 flex items-center justify-between text-zinc-300 text-[10px] font-bold">
                         <span className="flex items-center gap-1.5">
-                          <Brain className="h-3.5 w-3.5 text-purple-400 animate-pulse shrink-0" />
+                          <Brain className="h-3.5 w-3.5 text-slate-300 animate-pulse shrink-0" />
                           &lt;Reasoning&gt; Thought Process
                         </span>
                         <div className="flex items-center gap-1.5 text-[9px] opacity-70">
@@ -799,7 +712,7 @@ export default function AIElementsPlayground({ onClose }: { onClose?: () => void
                   )}
 
                   {/* Core markdown styled text elements */}
-                  <div className="space-y-2 selection:bg-purple-500/35 break-all">
+                  <div className="space-y-2 selection:bg-slate-500/35 break-all">
                     {parseAIElementsMarkdown(m.text, m.citations)}
                   </div>
 
@@ -807,24 +720,24 @@ export default function AIElementsPlayground({ onClose }: { onClose?: () => void
                   {m.sender === 'ai' && m.citations && m.citations.length > 0 && (
                     <div className="mt-4 pt-3 border-t border-white/5 space-y-1.5 font-sans">
                       <div className="text-[9px] uppercase tracking-wider font-semibold text-zinc-500 flex items-center gap-1">
-                        <BookOpen className="h-3 w-3 text-purple-400" />
+                        <BookOpen className="h-3 w-3 text-slate-400" />
                         &lt;Citations&gt; 检索出处证明
                       </div>
                       <div className="grid grid-cols-1 gap-1.5">
                         {m.citations.map((c) => (
                           <div 
                             key={c.id}
-                            className="p-2 bg-zinc-950 rounded-lg border border-white/10 hover:border-purple-500/20 text-[10px] transition cursor-pointer"
+                            className="p-2 bg-zinc-950 rounded-lg border border-white/10 hover:border-white/20 text-[10px] transition cursor-pointer"
                           >
                             <div className="flex items-center justify-between text-[9px] text-zinc-300 font-semibold mb-0.5">
-                              <span className="text-purple-400 font-mono">[{c.id}] {c.title}</span>
+                              <span className="text-slate-300 font-mono">[{c.id}] {c.title}</span>
                               <a 
                                 href={c.url} 
                                 target="_blank" 
                                 rel="noreferrer"
-                                className="text-purple-400 hover:text-purple-300 ml-1 font-mono text-[8.5px] uppercase flex items-center gap-0.5 underline shrink-0"
+                                className="text-slate-400 hover:text-slate-300 ml-1 font-mono text-[8.5px] uppercase flex items-center gap-0.5 underline shrink-0"
                               >
-                                Pub/Trial ➔
+                                Source
                               </a>
                             </div>
                             <p className="text-zinc-500 text-[9.5px] italic font-sans leading-relaxed">
@@ -847,15 +760,15 @@ export default function AIElementsPlayground({ onClose }: { onClose?: () => void
             {/* AI Typing state block */}
             {isTyping && (
               <div className="flex items-start gap-3">
-                <div className="p-1.5 rounded-lg border text-[9px] font-bold tracking-wider shrink-0 font-mono bg-purple-950/60 text-purple-300 border-purple-500/25">
+                <div className="p-1.5 rounded-lg border text-[9px] font-bold tracking-wider shrink-0 font-mono bg-slate-950/70 text-slate-300 border-white/10">
                   OSINT
                 </div>
-                <div className="max-w-[80%] rounded-2xl p-4 bg-zinc-950/70 border border-purple-500/10 rounded-tl-none text-zinc-300 glass flex flex-col gap-2">
+                <div className="max-w-[80%] rounded-2xl p-4 bg-zinc-950/70 border border-white/10 rounded-tl-none text-zinc-300 glass flex flex-col gap-2">
                   <div className="flex items-center gap-1.5">
-                    <span className="h-1.5 w-1.5 rounded-full bg-purple-400 animate-bounce duration-300"></span>
-                    <span className="h-1.5 w-1.5 rounded-full bg-purple-400 animate-bounce [animation-delay:0.15s] duration-300"></span>
-                    <span className="h-1.5 w-1.5 rounded-full bg-purple-400 animate-bounce [animation-delay:0.3s] duration-300"></span>
-                    <span className="text-[10px] text-purple-400 ml-1 font-mono tracking-widest animate-pulse font-semibold">
+                    <span className="h-1.5 w-1.5 rounded-full bg-slate-400 animate-bounce duration-300"></span>
+                    <span className="h-1.5 w-1.5 rounded-full bg-slate-400 animate-bounce [animation-delay:0.15s] duration-300"></span>
+                    <span className="h-1.5 w-1.5 rounded-full bg-slate-400 animate-bounce [animation-delay:0.3s] duration-300"></span>
+                    <span className="text-[10px] text-slate-400 ml-1 font-mono tracking-widest animate-pulse font-semibold">
                       THINKING (R1 Pipeline Active)...
                     </span>
                   </div>
@@ -873,12 +786,12 @@ export default function AIElementsPlayground({ onClose }: { onClose?: () => void
               onDragOver={handleDrag} 
               onDragLeave={handleDrag} 
               onDrop={handleDrop}
-              className="absolute inset-0 z-30 bg-purple-950/50 backdrop-blur-xs border-2 border-dashed border-purple-500 flex flex-col items-center justify-center p-6 text-center"
+              className="absolute inset-0 z-30 bg-slate-950/55 backdrop-blur-xs border-2 border-dashed border-slate-400 flex flex-col items-center justify-center p-6 text-center"
             >
-              <Paperclip className="h-12 w-12 text-purple-400 animate-bounce mb-3" />
-              <h3 className="text-sm font-bold text-white uppercase tracking-wider">投递至化验报告特征重叠重排序大厅</h3>
+              <Paperclip className="h-12 w-12 text-slate-300 animate-bounce mb-3" />
+              <h3 className="text-sm font-bold text-white uppercase tracking-wider">拖拽文件到此处</h3>
               <p className="text-xs text-zinc-300 mt-2 max-w-sm leading-normal">
-                支持直接将任何诊断报告、出院指南 txt/pdf/img 放至此处。AI Elements 自动构建附录切片并解析！
+                支持报告、PDF、图片和文本附件。
               </p>
             </div>
           )}
@@ -891,7 +804,7 @@ export default function AIElementsPlayground({ onClose }: { onClose?: () => void
                   key={f.id}
                   className="bg-zinc-900 border border-white/10 hover:border-red-500/20 px-2 py-1 rounded-lg flex items-center gap-2 text-[10px] font-mono text-zinc-300 transition group select-none"
                 >
-                  <FileText className="h-3.5 w-3.5 text-purple-400 shrink-0" />
+                  <FileText className="h-3.5 w-3.5 text-slate-400 shrink-0" />
                   <span className="max-w-[120px] truncate">{f.name}</span>
                   <span className="text-[8px] text-zinc-500">({f.size})</span>
                   <button 
@@ -927,7 +840,7 @@ export default function AIElementsPlayground({ onClose }: { onClose?: () => void
               />
               <label 
                 htmlFor="playground_file_input"
-                className="p-3 bg-zinc-900 border border-white/10 hover:border-purple-500/30 text-zinc-400 hover:text-purple-300 rounded-xl flex items-center justify-center transition cursor-pointer"
+                className="p-3 bg-zinc-900 border border-white/10 hover:border-slate-500/30 text-zinc-400 hover:text-slate-300 rounded-xl flex items-center justify-center transition cursor-pointer"
                 title="上传临床病理 PDF / 照片等附件特征"
               >
                 <Paperclip className="h-4.5 w-4.5" />
@@ -940,13 +853,13 @@ export default function AIElementsPlayground({ onClose }: { onClose?: () => void
               onChange={(e) => setPromptInput(e.target.value)}
               placeholder={isTyping ? '提供商接口正在反馈中，请耐心等候...' : '输入提问或指令，AI Elements Primitives 进行解析...'}
               disabled={isTyping}
-              className="flex-1 bg-zinc-900 border border-white/10 rounded-xl px-4 py-3 text-xs text-white placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-purple-500/40 transition disabled:opacity-50 font-sans"
+              className="flex-1 bg-zinc-900 border border-white/10 rounded-xl px-4 py-3 text-xs text-white placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-slate-500/40 transition disabled:opacity-50 font-sans"
             />
 
             <button
               type="submit"
               disabled={isTyping || (!promptInput.trim() && attachedFiles.length === 0)}
-              className="p-3 bg-purple-600 hover:bg-purple-500 text-white rounded-xl cursor-pointer transition flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed shrink-0 border border-white/10 shadow-lg"
+                  className="p-3 bg-slate-700 hover:bg-slate-600 text-white rounded-xl cursor-pointer transition flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed shrink-0 border border-white/10 shadow-lg"
               title="提交查询"
             >
               <Send className="h-4.5 w-4.5" />
@@ -963,7 +876,7 @@ export default function AIElementsPlayground({ onClose }: { onClose?: () => void
         {/* Dynamic header tabs */}
         <div className="p-4 border-b border-white/10 bg-zinc-950/95 flex flex-col sm:flex-row sm:items-center justify-between gap-3 font-sans">
           <div className="flex items-center gap-2">
-            <Code className="h-5 w-5 text-purple-400" />
+            <Code className="h-5 w-5 text-slate-300" />
             <div>
               <h2 className="text-xs font-bold text-white uppercase tracking-wider">
                 Next.js + AI SDK (AI Elements) 部署与集成方法指南
@@ -978,21 +891,21 @@ export default function AIElementsPlayground({ onClose }: { onClose?: () => void
             <button
               type="button"
               onClick={() => setDocTab('vercel_sdk')}
-              className={`px-3 py-1.5 rounded-lg cursor-pointer transition ${docTab === 'vercel_sdk' ? 'bg-purple-600/10 text-purple-300 border border-purple-500/20' : 'text-zinc-500 hover:text-zinc-300'}`}
+              className={`px-3 py-1.5 rounded-lg cursor-pointer transition ${docTab === 'vercel_sdk' ? 'bg-white/5 text-white border border-white/10' : 'text-zinc-500 hover:text-zinc-300'}`}
             >
               1. 安装依赖 & env
             </button>
             <button
               type="button"
               onClick={() => setDocTab('ai_elements')}
-              className={`px-3 py-1.5 rounded-lg cursor-pointer transition ${docTab === 'ai_elements' ? 'bg-purple-600/10 text-purple-300 border border-purple-500/20' : 'text-zinc-500 hover:text-zinc-300'}`}
+              className={`px-3 py-1.5 rounded-lg cursor-pointer transition ${docTab === 'ai_elements' ? 'bg-white/5 text-white border border-white/10' : 'text-zinc-500 hover:text-zinc-300'}`}
             >
               2. 路由接口 (chat/route)
             </button>
             <button
               type="button"
               onClick={() => setDocTab('custom_router')}
-              className={`px-3 py-1.5 rounded-lg cursor-pointer transition ${docTab === 'custom_router' ? 'bg-purple-600/10 text-purple-300 border border-purple-500/20' : 'text-zinc-500 hover:text-zinc-300'}`}
+              className={`px-3 py-1.5 rounded-lg cursor-pointer transition ${docTab === 'custom_router' ? 'bg-white/5 text-white border border-white/10' : 'text-zinc-500 hover:text-zinc-300'}`}
             >
               3. AI Elements 组件使用
             </button>
@@ -1000,12 +913,12 @@ export default function AIElementsPlayground({ onClose }: { onClose?: () => void
         </div>
 
         {/* Recipe detail container */}
-        <div className="p-5 overflow-x-auto selection:bg-purple-500/35 leading-relaxed text-xs">
+        <div className="p-5 overflow-x-auto selection:bg-slate-500/35 leading-relaxed text-xs">
           
           {docTab === 'vercel_sdk' && (
             <div className="space-y-4">
               <div className="space-y-1.5 font-sans">
-                <span className="text-[10px] font-bold text-purple-400 font-mono tracking-widest uppercase block">
+                <span className="text-[10px] font-bold text-slate-400 font-mono tracking-widest uppercase block">
                   Step 1. 初始化 Next.js 项目并安装核心 AI SDK 库
                 </span>
                 <p className="text-[11px] text-zinc-400">
@@ -1016,19 +929,19 @@ export default function AIElementsPlayground({ onClose }: { onClose?: () => void
               <div className="bg-zinc-900 p-4 rounded-xl border border-white/10 relative">
                 <button
                   onClick={() => handleCopyCode(`npm install ai @ai-sdk/openai @ai-sdk/google @ai-sdk/anthropic lucide-react`, 'd1')}
-                  className="absolute right-3 top-3 text-[10px] text-purple-400 hover:text-purple-300 font-semibold flex items-center gap-1 cursor-pointer bg-black/40 px-2 py-1 rounded"
+                  className="absolute right-3 top-3 text-[10px] text-slate-400 hover:text-slate-300 font-semibold flex items-center gap-1 cursor-pointer bg-black/40 px-2 py-1 rounded"
                 >
-                  {copiedCode === 'd1' ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
+                  {copiedCode === 'd1' ? <Check className="h-3 w-3 text-slate-300" /> : <Copy className="h-3 w-3" />}
                   {copiedCode === 'd1' ? '已复制' : '复制代码'}
                 </button>
-                <div className="text-purple-300 select-all font-mono leading-normal">
+                <div className="text-slate-300 select-all font-mono leading-normal">
                   # 安装 Vercel AI SDK 和主要的提供商包<br/>
                   <span className="text-white">npm install ai @ai-sdk/openai @ai-sdk/google @ai-sdk/anthropic lucide-react</span>
                 </div>
               </div>
 
               <div className="space-y-1.5 font-sans pt-2">
-                <span className="text-[10px] font-bold text-purple-400 font-mono tracking-widest uppercase block">
+                <span className="text-[10px] font-bold text-slate-400 font-mono tracking-widest uppercase block">
                   Step 2. 注入多通道环境变量 (.env)
                 </span>
                 <p className="text-[11px] text-zinc-400">
@@ -1039,9 +952,9 @@ export default function AIElementsPlayground({ onClose }: { onClose?: () => void
               <div className="bg-zinc-900 p-4 rounded-xl border border-white/10 relative">
                 <button
                   onClick={() => handleCopyCode(`# Google Gemini API Key\nGEMINI_API_KEY="AIzaSy..."\n\n# OpenAI Key & Base Endpoint\nOPENAI_API_KEY="sk-proj-..."\n\n# SiliconFlow Key\nSILICONFLOW_API_KEY="sk-sf-..."\nSILICONFLOW_BASE_URL="https://api.siliconflow.cn/v1"\n\n# OpenRouter API Key\nOPENROUTER_API_KEY="sk-or-..."`, 'd2')}
-                  className="absolute right-3 top-3 text-[10px] text-purple-400 hover:text-purple-300 font-semibold flex items-center gap-1 cursor-pointer bg-black/40 px-2 py-1 rounded"
+                  className="absolute right-3 top-3 text-[10px] text-slate-400 hover:text-slate-300 font-semibold flex items-center gap-1 cursor-pointer bg-black/40 px-2 py-1 rounded"
                 >
-                  {copiedCode === 'd2' ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
+                  {copiedCode === 'd2' ? <Check className="h-3 w-3 text-slate-300" /> : <Copy className="h-3 w-3" />}
                   {copiedCode === 'd2' ? '已复制' : '复制代码'}
                 </button>
                 <pre className="text-zinc-400 select-all font-mono leading-relaxed">
@@ -1066,7 +979,7 @@ OPENROUTER_API_KEY="sk-or-..."`}
           {docTab === 'ai_elements' && (
             <div className="space-y-4">
               <div className="space-y-1.5 font-sans font-sans">
-                <span className="text-[10px] font-bold text-purple-400 font-mono tracking-widest uppercase block">
+                <span className="text-[10px] font-bold text-slate-400 font-mono tracking-widest uppercase block">
                   Step 3. 开发 Next.js App Router 动态流式后端路由 (/app/api/chat/route.ts)
                 </span>
                 <p className="text-[11px] text-zinc-400">
@@ -1077,12 +990,12 @@ OPENROUTER_API_KEY="sk-or-..."`}
               <div className="bg-zinc-900 p-4 rounded-xl border border-white/10 relative max-h-[350px] overflow-y-auto scrollbar-thin">
                 <button
                   onClick={() => handleCopyCode(NEXTJS_RAW_API, 'd3')}
-                  className="absolute right-3 top-3 text-[10px] text-purple-400 hover:text-purple-300 font-semibold flex items-center gap-1 cursor-pointer bg-black/40 px-2 py-1 rounded z-20"
+                  className="absolute right-3 top-3 text-[10px] text-slate-400 hover:text-slate-300 font-semibold flex items-center gap-1 cursor-pointer bg-black/40 px-2 py-1 rounded z-20"
                 >
-                  {copiedCode === 'd3' ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
+                  {copiedCode === 'd3' ? <Check className="h-3 w-3 text-slate-300" /> : <Copy className="h-3 w-3" />}
                   {copiedCode === 'd3' ? '已复制' : '复制代码'}
                 </button>
-                <pre className="text-emerald-300 select-all font-mono leading-relaxed">
+                <pre className="text-slate-300 select-all font-mono leading-relaxed">
 {NEXTJS_RAW_API}
                 </pre>
               </div>
@@ -1092,7 +1005,7 @@ OPENROUTER_API_KEY="sk-or-..."`}
           {docTab === 'custom_router' && (
             <div className="space-y-4">
               <div className="space-y-1.5 font-sans">
-                <span className="text-[10px] font-bold text-purple-400 font-mono tracking-widest uppercase block">
+                <span className="text-[10px] font-bold text-slate-400 font-mono tracking-widest uppercase block">
                   Step 4. 在前端页绘制 Vercel AI Elements 标准拟合组件
                 </span>
                 <p className="text-[11px] text-zinc-400">
@@ -1103,12 +1016,12 @@ OPENROUTER_API_KEY="sk-or-..."`}
               <div className="bg-zinc-900 p-4 rounded-xl border border-white/10 relative max-h-[350px] overflow-y-auto scrollbar-thin">
                 <button
                   onClick={() => handleCopyCode(NEXTJS_RAW_FE, 'd4')}
-                  className="absolute right-3 top-3 text-[10px] text-purple-400 hover:text-purple-300 font-semibold flex items-center gap-1 cursor-pointer bg-black/40 px-2 py-1 rounded z-20"
+                  className="absolute right-3 top-3 text-[10px] text-slate-400 hover:text-slate-300 font-semibold flex items-center gap-1 cursor-pointer bg-black/40 px-2 py-1 rounded z-20"
                 >
-                  {copiedCode === 'd4' ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
+                  {copiedCode === 'd4' ? <Check className="h-3 w-3 text-slate-300" /> : <Copy className="h-3 w-3" />}
                   {copiedCode === 'd4' ? '已复制' : '复制代码'}
                 </button>
-                <pre className="text-indigo-300 select-all font-mono leading-relaxed">
+                <pre className="text-slate-300 select-all font-mono leading-relaxed">
 {NEXTJS_RAW_FE}
                 </pre>
               </div>
@@ -1131,8 +1044,8 @@ function parseAIElementsMarkdown(text: string, citations?: any[]) {
 
     if (trimmed.startsWith('###')) {
       return (
-        <h3 key={blockIdx} className="text-xs font-bold text-purple-300 uppercase tracking-wider mt-4 mb-2 flex items-center gap-1.5">
-          <span className="w-1.5 h-1.5 bg-purple-400 rounded-full"></span>
+        <h3 key={blockIdx} className="text-xs font-bold text-slate-300 uppercase tracking-wider mt-4 mb-2 flex items-center gap-1.5">
+          <span className="w-1.5 h-1.5 bg-slate-400 rounded-full"></span>
           {parseInlineCitations(trimmed.replace(/^###\s*/, ''), citations)}
         </h3>
       );
@@ -1159,7 +1072,7 @@ function parseAIElementsMarkdown(text: string, citations?: any[]) {
           {lines.map((line, lineIdx) => {
             const t = line.trim();
             let content = t;
-            let marker = <span className="text-purple-400 shrink-0 font-bold select-none">✦</span>;
+            let marker = <span className="text-slate-400 shrink-0 font-bold select-none">✦</span>;
 
             if (t.startsWith('*')) {
               content = t.replace(/^\*\s*/, '');
@@ -1168,7 +1081,7 @@ function parseAIElementsMarkdown(text: string, citations?: any[]) {
             } else {
               const match = t.match(/^(\d+)\.\s*/);
               if (match) {
-                marker = <span className="text-purple-300 font-mono text-[9px] shrink-0 font-bold">{match[1]}.</span>;
+                marker = <span className="text-slate-300 font-mono text-[9px] shrink-0 font-bold">{match[1]}.</span>;
                 content = t.replace(/^\d+\.\s*/, '');
               }
             }
@@ -1214,7 +1127,7 @@ function parseInlineCitations(text: string, citations?: any[]) {
         className="inline-flex items-center mx-0.5"
         title={linkedCitation?.title || `Citation [${citationId}]`}
       >
-        <span className="cursor-help text-[9px] font-mono font-bold bg-purple-500/15 hover:bg-purple-500/25 text-purple-300 border border-purple-500/30 px-1 rounded transition">
+        <span className="cursor-help text-[9px] font-mono font-bold bg-slate-500/15 hover:bg-slate-500/25 text-slate-300 border border-slate-500/30 px-1 rounded transition">
           [{citationId}]
         </span>
       </span>
@@ -1239,7 +1152,7 @@ function parseStrongTags(text: string) {
     if (p.startsWith('**') && p.endsWith('**')) {
       tokens.push(<strong key={idx} className="font-semibold text-white">{p.substring(2, p.length - 2)}</strong>);
     } else if (p.startsWith('`') && p.endsWith('`')) {
-      tokens.push(<code key={idx} className="bg-white/10 text-purple-200 px-1 py-0.2 rounded font-mono text-[9.5px] border border-white/5 mx-0.5">{p.substring(1, p.length - 1)}</code>);
+      tokens.push(<code key={idx} className="bg-white/10 text-slate-200 px-1 py-0.2 rounded font-mono text-[9.5px] border border-white/5 mx-0.5">{p.substring(1, p.length - 1)}</code>);
     } else {
       tokens.push(p);
     }
@@ -1358,7 +1271,7 @@ export default function ChatPage() {
           placeholder="Type elements prompt..." 
           className="flex-1 bg-zinc-900 border text-xs p-3 text-white focus:outline-none"
         />
-        <button type="submit" className="bg-purple-600 px-4 text-xs font-bold">
+        <button type="submit" className="bg-slate-700 px-4 text-xs font-bold">
           Send
         </button>
       </form>

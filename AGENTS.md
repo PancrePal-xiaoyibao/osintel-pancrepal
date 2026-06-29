@@ -26,4 +26,4 @@ Never commit secrets. Local overrides belong in `.env.local`; keep `.env.example
 This repo does not yet have a long git history, so use short imperative commit messages such as `Add globe view docs` or `Align Supabase schema`. Pull requests should summarize the change, mention verification commands, and include screenshots for UI changes.
 
 ## Documentation & Records
-Keep project decisions and progress in `docs/`. Update `docs/decision-log.md`, `docs/progress.md`, `docs/handoff.md`, and `docs/git-log.md` when you make meaningful changes so future contributors can recover context quickly.
+Keep project decisions and progress in `docs/`. Update `docs/process/decision-log.md`, `docs/process/progress.md`, `docs/process/handoff.md`, and `docs/process/git-log.md` when you make meaningful changes so future contributors can recover context quickly. Design and reference material lives in `docs/design/`; specs and runbooks in `docs/superpowers/`.
