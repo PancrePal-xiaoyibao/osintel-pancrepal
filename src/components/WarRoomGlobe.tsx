@@ -120,13 +120,19 @@ export default function WarRoomGlobe() {
     const resize = () => {
       const width = mount.clientWidth;
       const height = mount.clientHeight;
+      if (width === 0 || height === 0) return;
       renderer.setSize(width, height);
       camera.aspect = width / height;
       camera.updateProjectionMatrix();
     };
 
-    const onResize = () => resize();
-    window.addEventListener('resize', onResize);
+    // Apply correct aspect ratio immediately so the sphere is not stretched.
+    resize();
+
+    // Track the container size (more reliable than window resize for panel layouts).
+    const resizeObserver = new ResizeObserver(() => resize());
+    resizeObserver.observe(mount);
+    window.addEventListener('resize', resize);
 
     let raf = 0;
     const animate = () => {
@@ -144,7 +150,8 @@ export default function WarRoomGlobe() {
 
     return () => {
       cancelAnimationFrame(raf);
-      window.removeEventListener('resize', onResize);
+      resizeObserver.disconnect();
+      window.removeEventListener('resize', resize);
       disposeThreeScene(scene);
       renderer.dispose();
       if (renderer.domElement.parentNode === mount) {
@@ -165,7 +172,7 @@ export default function WarRoomGlobe() {
           <span className="text-[10px] text-emerald-400 font-mono">LIVE</span>
         </div>
       </div>
-      <div ref={mountRef} className="h-[340px] rounded-2xl border border-white/10 bg-[radial-gradient(circle_at_top,#0f172a_0,#050507_70%)] overflow-hidden">
+      <div ref={mountRef} className="relative h-[340px] rounded-2xl border border-white/10 bg-[radial-gradient(circle_at_top,#0f172a_0,#050507_70%)] overflow-hidden">
         <div className="absolute inset-x-0 bottom-3 flex items-center justify-between px-4 text-[10px] text-zinc-500 font-mono">
           <span className="flex items-center gap-1"><Activity className="h-3 w-3" /> center-first</span>
           <span className="flex items-center gap-1"><MapPin className="h-3 w-3" /> 24h / 7d / 30d</span>
