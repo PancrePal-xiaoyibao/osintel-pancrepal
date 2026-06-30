@@ -354,7 +354,7 @@ export default function App() {
     async function loadInitialData() {
       try {
         const [feedRes, coordRes, dogRes, healthRes] = await Promise.all([
-          fetch('/api/osint/feed?window=30d'),
+          fetch('/api/osint/feed/cached'),  // Try cached file first (instant)
           fetch('/api/osint/resources'),
           fetch('/api/osint/watchdog'),
           fetch('/api/health')
@@ -365,7 +365,9 @@ export default function App() {
         const dogObj = await dogRes.json();
         const healthObj = await healthRes.json();
 
-        setItems(feedObj.data?.length ? feedObj.data : INITIAL_OSINT_FEED);
+        // If cached file has data, use it; otherwise fall back to live feed or seed
+        const feedItems = feedObj.data?.length ? feedObj.data : INITIAL_OSINT_FEED;
+        setItems(feedItems);
         setNewsRefreshMode(feedObj.mode || 'fallback');
         setNewsSources(feedObj.sources || []);
         setNewsWindowLabel((feedObj.selectedWindow || feedObj.windows?.[0]?.label || '30d') as '24h' | '7d' | '30d');
@@ -388,16 +390,16 @@ export default function App() {
     loadInitialData();
   }, []);
 
-  // Auto-refresh the news feed every 5 minutes (pre-designed cadence). The
-  // server caches multi-source aggregation for 5 minutes, so this poll keeps
-  // the homepage live without hammering the upstream search APIs.
+  // Auto-refresh the feed every 5 minutes by reading the persisted cache file.
+  // The backend auto-refreshes the file in the background, so the frontend just
+  // polls the cached endpoint (instant, no re-search latency).
   useEffect(() => {
     const timer = setInterval(() => {
-      fetch(`/api/osint/feed?window=${newsWindowLabel}`)
+      fetch('/api/osint/feed/cached')
         .then((res) => res.json())
         .then((obj) => {
-          if (obj.status === 'ok') {
-            setItems(obj.data || []);
+          if (obj.status === 'ok' && obj.data?.length > 0) {
+            setItems(obj.data);
             setNewsRefreshMode(obj.mode || 'fallback');
             setNewsSources(obj.sources || []);
           }
@@ -407,7 +409,7 @@ export default function App() {
         });
     }, 5 * 60 * 1000);
     return () => clearInterval(timer);
-  }, [newsWindowLabel]);
+  }, []);
 
   // Set up periodic polling for Watchdog telemetry metrics (e.g., CPU, API counts) to keep dashboard responsive
   useEffect(() => {

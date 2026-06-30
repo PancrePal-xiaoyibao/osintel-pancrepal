@@ -224,6 +224,81 @@ app.post('/api/osint/feed/refresh', async (req, res) => {
   res.json({ status: 'ok', selectedWindow: '30d', ...snapshot });
 });
 
+// Serve the latest persisted search results from disk (instant, no re-search).
+// The background auto-refresh keeps this file fresh every 5 minutes.
+// Frontend polls this endpoint for the stream feed.
+app.get('/api/osint/feed/cached', (req, res) => {
+  try {
+    const cacheDir = path.resolve(process.cwd(), 'data', 'search-cache');
+    // Default query file
+    const queryParam = typeof req.query.q === 'string' ? req.query.q : 'pancreatic cancer';
+    const safeKey = queryParam.toLowerCase().trim().replace(/[^a-z0-9_-]/gi, '_').slice(0, 120) + '.json';
+    const filePath = path.join(cacheDir, safeKey);
+
+    if (!fs.existsSync(filePath)) {
+      return res.json({ status: 'ok', cached: false, data: [], sources: [], mode: 'fallback', message: 'No cached results yet. Waiting for first auto-refresh.' });
+    }
+
+    const raw = fs.readFileSync(filePath, 'utf-8');
+    const parsed = JSON.parse(raw);
+    const result = parsed.result || parsed;
+
+    // Map SearchResult[] to the feed item format
+    const items = (result.results || []).map((r: any, i: number) => ({
+      id: `cached-${i}-${Date.now()}`,
+      title: r.title || '',
+      url: r.url || '',
+      source: r.source || 'web',
+      publishedAt: r.publishedAt || parsed.timestamp || new Date().toISOString(),
+      country: 'Global',
+      category: r.kind === 'trial' ? 'trial' : r.kind === 'academic' ? 'drug' : r.kind === 'news' ? 'oncology' : 'patient_resource',
+      entities: [r.kind, r.providerId].filter(Boolean),
+      importanceScore: 7,
+      summary: r.snippet || '',
+      evidenceLevel: r.kind === 'academic' || r.kind === 'guideline' ? 'B' : 'C',
+      clickable: true,
+      sourceType: r.kind || 'other',
+      topicTags: [r.kind, r.providerId].filter(Boolean),
+      contentTags: [r.kind === 'news' ? 'news' : 'literature'],
+      freshnessMinutes: 0,
+      freshnessWindow: '7d',
+      centerPriority: false,
+      reviewStatus: 'pending',
+      sourceEvidence: [{ title: r.title, url: r.url }]
+    }));
+
+    res.json({
+      status: 'ok',
+      cached: true,
+      refreshedAt: parsed.timestamp || new Date().toISOString(),
+      mode: result.mode || 'aggregate',
+      sources: (result.providers || []).map((p: any) => ({ source: p.id, ok: p.ok, count: p.count, reason: p.reason })),
+      data: items
+    });
+  } catch (err) {
+    res.json({ status: 'ok', cached: false, data: [], sources: [], mode: 'fallback', message: 'Cache read error' });
+  }
+});
+
+// List all cached search files (for debugging / admin)
+app.get('/api/osint/feed/cache-list', (req, res) => {
+  try {
+    const cacheDir = path.resolve(process.cwd(), 'data', 'search-cache');
+    if (!fs.existsSync(cacheDir)) {
+      return res.json({ status: 'ok', files: [] });
+    }
+    const files = fs.readdirSync(cacheDir)
+      .filter(f => f.endsWith('.json') && !f.startsWith('_'))
+      .map(f => {
+        const stat = fs.statSync(path.join(cacheDir, f));
+        return { name: f, size: stat.size, modified: stat.mtime.toISOString() };
+      });
+    res.json({ status: 'ok', files });
+  } catch {
+    res.json({ status: 'ok', files: [] });
+  }
+});
+
 // 1.5 Manual Source Ingestion & Clinical Quality Validator
 app.post('/api/osint/manual-ingest', (req, res) => {
   const { title, url, source, country, category, entities, summary, evidenceLevel, clinicalTrialId } = req.body;
@@ -1555,6 +1630,22 @@ async function startServer() {
     console.log(`OSINT Intelligence Hub Server running on http://0.0.0.0:${PORT}`);
     console.log(`API credentials status: ${process.env.GEMINI_API_KEY ? 'Available' : 'Missing (Using high-fidelity medical simulator)'}`);
     console.log(`=======================================================`);
+
+    // Background 5-minute auto-refresh: search → persist to file → next poll reads fresh file.
+    // This keeps the feed live without waiting for a user to trigger refresh.
+    const REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+    const autoRefresh = async () => {
+      try {
+        console.log('[auto-refresh] Starting scheduled news aggregation...');
+        await refreshNewsFeed('pancreatic cancer');
+        console.log('[auto-refresh] Done. Next in 5 minutes.');
+      } catch (err) {
+        console.error('[auto-refresh] Failed:', err);
+      }
+    };
+    // First refresh shortly after startup (10s delay to let Vite finish)
+    setTimeout(autoRefresh, 10000);
+    setInterval(autoRefresh, REFRESH_INTERVAL_MS);
   });
 }
 
