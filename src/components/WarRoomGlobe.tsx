@@ -122,7 +122,25 @@ export default function WarRoomGlobe() {
       const height = mount.clientHeight;
       if (width === 0 || height === 0) return;
       renderer.setSize(width, height);
-      camera.aspect = width / height;
+      const aspect = width / height;
+      camera.aspect = aspect;
+
+      // Pull the camera back far enough that the whole globe fits, even in a
+      // narrow portrait panel where the horizontal field of view is the limit.
+      const fitRadius = 2.7; // sphere (2.1) + atmosphere + pulse rings + margin
+      const vFov = THREE.MathUtils.degToRad(camera.fov);
+      const distForHeight = fitRadius / Math.tan(vFov / 2);
+      const hFov = 2 * Math.atan(Math.tan(vFov / 2) * aspect);
+      const distForWidth = fitRadius / Math.tan(hFov / 2);
+      camera.position.z = Math.max(distForHeight, distForWidth);
+
+      // Keep the depth fog proportional to the (now adaptive) camera distance
+      // so the back of the globe fades nicely without darkening the whole sphere.
+      if (scene.fog instanceof THREE.Fog) {
+        scene.fog.near = camera.position.z - fitRadius;
+        scene.fog.far = camera.position.z + fitRadius * 1.4;
+      }
+
       camera.updateProjectionMatrix();
     };
 
@@ -137,8 +155,8 @@ export default function WarRoomGlobe() {
     let raf = 0;
     const animate = () => {
       raf = requestAnimationFrame(animate);
-      globeGroup.rotation.y += 0.002;
-      globeGroup.rotation.x = Math.sin(Date.now() * 0.00015) * 0.08;
+      globeGroup.rotation.y += 0.0045;
+      globeGroup.rotation.x = Math.sin(Date.now() * 0.0002) * 0.12;
       atmosphere.rotation.y = globeGroup.rotation.y * 0.7;
       pulseRings.forEach((ring, index) => {
         const scale = 1 + Math.sin(Date.now() * 0.002 + index) * 0.08;
