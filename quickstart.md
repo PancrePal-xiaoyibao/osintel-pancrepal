@@ -1,79 +1,99 @@
 # Quickstart
 
-Get the Pancreatic Cancer OSINT Hub running locally in just a few minutes.
+Get the Pancreatic Cancer OSINT Hub running locally in a few minutes.
 
 ## Prerequisites
 
 - Node.js 18+ (tested on Node 22)
 - npm
 
-## 1. Install Dependencies
+## 1. Install
 
 ```bash
 npm install
 ```
 
-## 2. Configure Environment
+## 2. Configure environment
 
-Copy the example and configure your keys. Every key is optional — the app degrades gracefully when keys are missing (simulated AI, offline mode).
+Copy the example file and fill in what you have. Every key is optional — the app
+degrades gracefully (simulated AI, anonymous evidence search) when keys are
+missing.
 
 ```bash
 cp .env.example .env
 ```
 
-**Optional keys in `.env`:**
+Key groups in `.env`:
 
-- **Gemini API** (for server-side AI)
+- **LLM (recommended)** — for real AI translation, review synthesis, assistant,
+  and the floating chatbot. Any OpenAI-compatible provider works; StepFun is
+  preconfigured as the default base URL:
   ```env
-  GEMINI_API_KEY="your-gemini-api-key"
+  LLM_API_KEY="your-openai-compatible-key"
+  LLM_BASE_URL="https://api.stepfun.com/v1"
+  LLM_MODEL="step-3.5-flash"
+  ```
+  Alternatively set `GEMINI_API_KEY` to use Google Gemini server-side.
+
+- **KnowS evidence search** — optional. The public anonymous tier works without a
+  key; set `KNOWS_API_KEY` only for higher rate limits.
+  ```env
+  KNOWS_API_KEY=""
+  KNOWS_BASE_URL="https://api.nullht.com"
   ```
 
-- **Local test login** (defaults shown)
+- **Local test login** — defaults shown; change as needed:
   ```env
   DEFAULT_USERNAME="admin"
   DEFAULT_PASSWORD="pancreas123"
   ```
 
-> Never commit `.env`. It is gitignored; only `.env.example` is tracked.
+> Never commit `.env`. It is gitignored. Only `.env.example` is tracked.
 
-## 3. Run the Development Server
+## 3. Run
 
 ```bash
 npm run dev
 ```
 
-Open http://localhost:3000 in your browser.
+Open http://localhost:3000.
 
-## 4. Log In
+## 4. Log in
 
-Choose one of:
+On the login screen use one of:
 
-- **Local account:** use `admin` / `pancreas123` (or register a new account)
-- **One-click demo login** for a quick guest session
-- **Google / email** via Firebase (advanced section)
+- **Account login (test):** username `admin`, password `pancreas123`
+  (or register a new account in the form).
+- **One-click demo login** for a quick guest session.
+- Google / email via Firebase (advanced section).
 
-## 5. Try the Features
+## 5. Try the personalized hub
 
-1. **Globe** — click the globe tab to see an interactive 3D map
-2. **News Feed** — view aggregated clinical news and research
-3. **Resource Map** — explore clinical trial sites and resources
-4. **Watchdog Console** — autonomous monitoring and alerts
-5. **Daily Briefing** — AI-summarized daily highlights
+1. Open the **我的专属 / My** tab.
+2. If prompted, fill in a de-identified profile (e.g. mutation `KRAS G12D`,
+   city). Save it.
+3. Back in the My hub, the five sections load: personalized news, 90-day
+   articles, PubMed papers, recruiting trials, KnowS evidence search, and the AI
+   assistant.
+4. Toggle **AI 中文翻译** to translate English papers/trials to Chinese.
+5. In the AI assistant, click **生成综述** for a zero-hallucination review.
 
-## 6. AI Chat
+## 6. Floating AI chatbot
 
-Click the **Chat** tab to interact with the AI assistant. If you have a `GEMINI_API_KEY` set, you'll get real AI responses; otherwise, simulated responses.
+Click the robot button (bottom-left). Configure provider/model/key in its
+settings, set an optional system context, and chat. Conversations and reasoning
+are saved per session in your browser.
 
-## Verify Installation
+## Verify (optional)
 
 ```bash
-npm run lint                   # TypeScript type-check
-npm run build                  # Production build
+npm run lint                          # TypeScript type-check
+node tests/research-pipeline.test.mjs # research + zero-hallucination verifier
+node tests/knows-client.test.mjs      # KnowS client + normalizer
+npm run build                         # production build
 ```
 
-Both should complete without errors.
-
-## Build & Serve Production
+## Build & serve production
 
 ```bash
 npm run build
@@ -82,18 +102,10 @@ npm start    # serves dist/server.cjs
 
 ## Troubleshooting
 
-- **"AI responses are generic"** — `GEMINI_API_KEY` is not set or unreachable. Set it in `.env` and restart `npm run dev`.
-- **"Changes to server.ts not showing"** — the Express server doesn't hot-reload. Restart `npm run dev`.
-- **"Port 3000 already in use"** — the dev server is already running, or another process is using port 3000. Kill the old process or specify a different port.
-- **Build fails with "module not found"** — run `npm install` again to ensure all dependencies are present.
-
-## Next Steps
-
-- Read [README.md](./README.md) for features and architecture overview
-- Check [AGENTS.md](./AGENTS.md) for development guidelines
-- Review [docs/design/PRD.md](./docs/design/PRD.md) for product requirements
-- See [docs/process/](./docs/process/) for decision logs and progress
-
-## Support
-
-For issues, feature requests, or contributions, please open an issue or pull request on GitHub.
+- **AI replies are simulated / generic** — no LLM key reachable. Set `LLM_API_KEY`
+  (or `GEMINI_API_KEY`) in `.env` and restart `npm run dev`.
+- **Evidence/news shows fallback data** — external APIs (KnowS / Europe PMC /
+  ClinicalTrials.gov) may be unreachable from your network; the app falls back
+  to seeded content. A bad `KNOWS_API_KEY` auto-falls back to the anonymous tier.
+- **Changes to `server.ts` not reflected** — restart `npm run dev` (the server
+  process does not hot-reload).

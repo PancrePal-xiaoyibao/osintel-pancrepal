@@ -1313,7 +1313,7 @@ export default function ResourceMapView({ centers, patientProfile, perspective }
                 animate={{ opacity: 0.5 }}
                 exit={{ opacity: 0 }}
                 onClick={() => setIsDrawerOpen(false)}
-                className="fixed inset-0 z-[9990] bg-black backdrop-blur-xs"
+                className="fixed inset-0 z-[80] bg-black backdrop-blur-xs"
               />
 
               {/* Sliding Drawer Content */}
@@ -1323,7 +1323,7 @@ export default function ResourceMapView({ centers, patientProfile, perspective }
                 animate={{ x: 0, opacity: 1 }}
                 exit={{ x: '100%', opacity: 0 }}
                 transition={{ type: 'spring', damping: 24, stiffness: 180 }}
-                className="fixed inset-y-0 right-0 z-[9999] w-full md:max-w-xl bg-zinc-950/98 border-l border-white/10 shadow-3xl p-6 overflow-y-auto backdrop-blur-xl flex flex-col justify-between scrollbar-thin scrollbar-thumb-zinc-600/80 scrollbar-track-zinc-900/50"
+                className="fixed inset-y-0 right-0 z-[90] w-full md:max-w-xl bg-zinc-950/98 border-l border-white/10 shadow-3xl p-6 overflow-y-auto backdrop-blur-xl flex flex-col justify-between scrollbar-thin scrollbar-thumb-zinc-600/80 scrollbar-track-zinc-900/50"
               >
                 <div className="space-y-6 flex-1 pr-1">
                   

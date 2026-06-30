@@ -3,6 +3,8 @@
 ## Project Structure & Module Organization
 This repository is a Vite + React + TypeScript app. Main application code lives in `src/`, with UI components in `src/components/`, shared logic in `src/lib/`, Firebase helpers in `src/firebase.ts`, and seed data in `src/seed-data.ts`. Global styles are in `src/index.css`. The app also includes `server.ts` for the local Node entry point and supporting config in `vite.config.ts` and `tsconfig.json`.
 
+The unified search module in `src/lib/search/` provides a pluggable provider registry (13 providers: KnowS, PubMed, ClinicalTrials.gov, AnySearch, Tavily, Serper, Google CSE, Metaso, Brave, Exa, Semantic Scholar, OpenAlex) with parallel execution, circuit breaking, and caching.
+
 ## Build, Test, and Development Commands
 - `npm install`: install dependencies.
 - `npm run dev`: start the local app with `tsx server.ts`.

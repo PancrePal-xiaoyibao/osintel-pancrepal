@@ -1,3 +1,6 @@
+// Register all search providers (side-effect import)
+import './src/lib/search/providers/index.ts';
+
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
@@ -5,6 +8,18 @@ import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, Type } from '@google/genai';
 import { INITIAL_OSINT_FEED, INITIAL_RESOURCE_CENTERS, MOCK_15DAY_REPORT } from './src/seed-data';
 import { OSINTItem, WatchdogStatus, ErrorLogEntry, OSINTCategory, EvidenceLevel } from './src/types';
+import { runHealthCheck } from './src/lib/health-check';
+import { refreshNewsWindows } from './src/lib/news/refresh.ts';
+import type { NewsWindowLabel } from './src/lib/news/pipeline.ts';
+import { getLlmProvider } from './src/lib/llm-providers.ts';
+import { searchPapers } from './src/lib/research/europepmc-adapter.ts';
+import { searchTrials } from './src/lib/research/ctgov-adapter.ts';
+import { deriveQuery, buildSearchTerm } from './src/lib/research/profile-query.ts';
+import { synthesizeReview } from './src/lib/research/review-synthesis.ts';
+import { callChatModel } from './src/lib/research/llm-call.ts';
+import { knowsSearch, knowsMultiSearch, isKnowsSource, KNOWS_SOURCE_IDS, type KnowsSource } from './src/lib/knows/knows-client.ts';
+import { normalizeEvidences } from './src/lib/knows/normalize.ts';
+import type { PatientProfile } from './src/types';
 import dotenv from 'dotenv';
 
 // Load environment variables
@@ -17,6 +32,14 @@ app.use(express.json());
 
 // In-memory data state
 let osintFeed: OSINTItem[] = [...INITIAL_OSINT_FEED];
+let cachedNewsRefresh: {
+  refreshedAt: string;
+  expiresAt: number;
+  items: OSINTItem[];
+  windows: { label: NewsWindowLabel; items: OSINTItem[] }[];
+  mode: 'aggregate' | 'fallback';
+  sources: { source: string; ok: boolean; count: number; reason?: string }[];
+} | null = null;
 const resourceCenters = [...INITIAL_RESOURCE_CENTERS].map(center => {
   if (!center.explicitCategory) {
     const text = (center.name + ' ' + center.description + ' ' + center.specialties.join(' ')).toLowerCase();
@@ -32,6 +55,60 @@ const resourceCenters = [...INITIAL_RESOURCE_CENTERS].map(center => {
   }
   return center;
 });
+
+function mapNewsItems(items: Array<Awaited<ReturnType<typeof refreshNewsWindows>>['items'][number]>): OSINTItem[] {
+  return items.map((item, index) => ({
+    id: item.itemKey,
+    title: item.title,
+    url: item.sourceUrl,
+    source: item.sourceTitle,
+    publishedAt: item.publishedAt || item.observedAt,
+    country: item.countryKey || item.regionKey || 'Global',
+    category: item.centerPriority ? 'oncology' : item.sourceType === 'drug' ? 'drug' : item.sourceType === 'trial' ? 'trial' : item.sourceType === 'nutrition' ? 'nutrition' : item.sourceType === 'psychology' ? 'psychology' : 'patient_resource',
+    entities: [...item.topicTags, ...item.contentTags].length > 0 ? [...new Set([...item.topicTags, ...item.contentTags])] : [item.title],
+    importanceScore: +(item.priorityScore / 10).toFixed(1),
+    summary: item.summary || item.patientSummary,
+    evidenceLevel: item.evidenceLevel,
+    clinicalTrialId: item.sourceEvidence.find((e) => /NCT\d+/i.test(e.title) || /NCT\d+/i.test(e.url)) ? item.sourceEvidence.find((e) => /NCT\d+/i.test(e.title) || /NCT\d+/i.test(e.url))?.title : undefined,
+    clickable: true,
+    sourceType: item.sourceType,
+    topicTags: item.topicTags,
+    contentTags: item.contentTags,
+    freshnessMinutes: item.freshnessMinutes,
+    freshnessWindow: item.windowLabel,
+    centerPriority: item.centerPriority,
+    reviewStatus: item.reviewStatus,
+    sourceEvidence: item.sourceEvidence
+  }));
+}
+
+async function refreshNewsFeed(query = 'pancreatic cancer') {
+  const refreshed = await refreshNewsWindows({
+    query,
+    observedAt: new Date().toISOString(),
+    freshnessWindows: ['24h', '7d', '30d']
+  });
+
+  const mapped = mapNewsItems(refreshed.items);
+  osintFeed = [...mapped, ...INITIAL_OSINT_FEED].slice(0, 300);
+  cachedNewsRefresh = {
+    refreshedAt: refreshed.refreshedAt,
+    expiresAt: Date.now() + 5 * 60 * 1000,
+    items: mapped,
+    windows: refreshed.windows.map((window) => ({ label: window.label, items: mapNewsItems(window.items) })),
+    mode: refreshed.mode,
+    sources: refreshed.sources
+  };
+
+  return cachedNewsRefresh;
+}
+
+async function getOrRefreshNewsFeed(force = false) {
+  if (!force && cachedNewsRefresh && cachedNewsRefresh.expiresAt > Date.now()) {
+    return cachedNewsRefresh;
+  }
+  return refreshNewsFeed();
+}
 
 // Watchdog Status State
 let watchdogStatus: WatchdogStatus = {
@@ -123,8 +200,28 @@ async function generateContentWithFallback(
 // REST API Endpoints
 
 // 1. Get entire OSINT Feed
-app.get('/api/osint/feed', (req, res) => {
-  res.json({ status: 'ok', data: osintFeed });
+app.get('/api/osint/feed', async (req, res) => {
+  const window = typeof req.query.window === 'string' ? req.query.window : '30d';
+  const force = req.query.force === '1' || req.query.force === 'true';
+  const snapshot = await getOrRefreshNewsFeed(force);
+  const source = window === '24h' || window === '7d' || window === '30d'
+    ? snapshot.windows.find((entry) => entry.label === window)
+    : undefined;
+  res.json({
+    status: 'ok',
+    selectedWindow: window,
+    refreshedAt: snapshot.refreshedAt,
+    mode: snapshot.mode,
+    sources: snapshot.sources,
+    data: source?.items || osintFeed,
+    windows: snapshot.windows
+  });
+});
+
+app.post('/api/osint/feed/refresh', async (req, res) => {
+  const query = typeof req.body?.query === 'string' ? req.body.query : 'pancreatic cancer';
+  const snapshot = await refreshNewsFeed(query);
+  res.json({ status: 'ok', selectedWindow: '30d', ...snapshot });
 });
 
 // 1.5 Manual Source Ingestion & Clinical Quality Validator
@@ -523,6 +620,15 @@ app.get('/api/osint/watchdog', (req, res) => {
   res.json({ status: 'ok', data: updatedStatus });
 });
 
+app.get('/api/health', (_req, res) => {
+  const health = runHealthCheck({
+    startupOk: true,
+    appReady: true,
+    dbReady: true
+  });
+  res.json({ status: health.ok ? 'ok' : 'error', data: health });
+});
+
 // 5. Trigger automated self-healing action in watchdog
 app.post('/api/osint/watchdog/repair', (req, res) => {
   watchdogStatus.status = 'healthy';
@@ -747,6 +853,453 @@ app.post('/api/osint/chat', async (req, res) => {
   }
 });
 
+// ============================================================================
+// Personalized OSINTel ("My" tab) — /api/personal/*
+// De-identified: only gene/cancer tokens reach external research APIs.
+// ============================================================================
+
+function profileFromBody(body: any): PatientProfile | null {
+  const p = body?.profile;
+  if (!p || typeof p !== 'object') return null;
+  return {
+    city: p.city || '',
+    mutations: Array.isArray(p.mutations) ? p.mutations : [],
+    ihcResults: p.ihcResults || '',
+    regimen: p.regimen || '',
+    efficacy: p.efficacy || '',
+    summary: p.summary || '',
+    lastUpdated: p.lastUpdated || new Date().toISOString()
+  };
+}
+
+/**
+ * Server-side default LLM (OpenAI-compatible) read from .env.
+ * Used as a fallback for the personalized routes when the client did not provide
+ * its own provider key. Supports StepFun and any OpenAI-compatible gateway.
+ * Accepts STEP_API_KEY as an alias for LLM_API_KEY (skill convention).
+ */
+function serverLlmConfig(): { provider: string; apiKey: string; baseUrl: string; model: string } | undefined {
+  const apiKey = (process.env.LLM_API_KEY || process.env.STEP_API_KEY || '').trim();
+  if (!apiKey) return undefined;
+  return {
+    provider: process.env.LLM_PROVIDER || 'openai_compatible',
+    apiKey,
+    baseUrl: (process.env.LLM_BASE_URL || 'https://api.stepfun.com/v1').trim(),
+    model: (process.env.LLM_MODEL || 'step-1-flash').trim()
+  };
+}
+
+/** Pick the client config when it carries a key, else the server env config. */
+function resolveLlmConfig(clientConfig: any): { provider: string; apiKey: string; baseUrl: string; model: string } | undefined {
+  if (clientConfig && typeof clientConfig === 'object' && (clientConfig.apiKey || '').trim()) {
+    return clientConfig;
+  }
+  return serverLlmConfig();
+}
+
+// ============================================================================
+// Local username/password auth — /api/auth/* (test-friendly, in-memory)
+// NOTE: in-memory + plaintext compare; for local/demo use only, not production.
+// ============================================================================
+type LocalUser = { username: string; password: string; displayName: string };
+const localUsers = new Map<string, LocalUser>();
+
+function defaultCreds(): { username: string; password: string } {
+  return {
+    username: (process.env.DEFAULT_USERNAME || 'admin').trim(),
+    password: (process.env.DEFAULT_PASSWORD || 'pancreas123').trim()
+  };
+}
+
+function makeToken(username: string): string {
+  return Buffer.from(`${username}:${Date.now()}`).toString('base64');
+}
+
+function buildAuthUser(username: string, displayName?: string) {
+  return {
+    uid: `local-${username}`,
+    username,
+    displayName: displayName || username,
+    email: `${username}@local.osintel`,
+    local: true
+  };
+}
+
+app.post('/api/auth/register', (req, res) => {
+  const username = String(req.body?.username || '').trim();
+  const password = String(req.body?.password || '');
+  const displayName = String(req.body?.displayName || '').trim();
+  if (!username || !password) {
+    return res.status(400).json({ status: 'error', message: '请填写用户名和密码。' });
+  }
+  if (username.length < 3 || password.length < 4) {
+    return res.status(400).json({ status: 'error', message: '用户名至少3位，密码至少4位。' });
+  }
+  if (username === defaultCreds().username || localUsers.has(username)) {
+    return res.status(409).json({ status: 'error', message: '该用户名已存在，请直接登录。' });
+  }
+  localUsers.set(username, { username, password, displayName: displayName || username });
+  res.json({ status: 'ok', message: '注册成功，请登录。', user: buildAuthUser(username, displayName) });
+});
+
+app.post('/api/auth/login', (req, res) => {
+  const username = String(req.body?.username || '').trim();
+  const password = String(req.body?.password || '');
+  if (!username || !password) {
+    return res.status(400).json({ status: 'error', message: '请填写用户名和密码。' });
+  }
+
+  const def = defaultCreds();
+  if (username === def.username && password === def.password) {
+    return res.json({ status: 'ok', token: makeToken(username), user: buildAuthUser(username, '默认测试用户') });
+  }
+
+  const found = localUsers.get(username);
+  if (found && found.password === password) {
+    return res.json({ status: 'ok', token: makeToken(username), user: buildAuthUser(username, found.displayName) });
+  }
+
+  return res.status(401).json({ status: 'error', message: '用户名或密码错误。' });
+});
+
+// ============================================================================
+// KnowS evidence search — /api/knows/* (shared base search capability)
+// ============================================================================
+
+// Single-source evidence search
+app.post('/api/knows/search', async (req, res) => {
+  watchdogStatus.apiQuotaUsed += 1;
+  const source = req.body?.source;
+  const query = typeof req.body?.query === 'string' ? req.body.query : '';
+  if (!isKnowsSource(source)) {
+    return res.status(400).json({ status: 'error', message: `source 必须是: ${KNOWS_SOURCE_IDS.join(', ')}` });
+  }
+  if (!query.trim()) {
+    return res.status(400).json({ status: 'error', message: '缺少 query。' });
+  }
+
+  const result = await knowsSearch({
+    source,
+    query,
+    apiKey: process.env.KNOWS_API_KEY,
+    baseUrl: process.env.KNOWS_BASE_URL
+  });
+
+  res.json({
+    status: 'ok',
+    source,
+    ok: result.ok,
+    reason: result.reason,
+    questionId: result.questionId,
+    items: result.ok ? normalizeEvidences(result.evidences, source) : []
+  });
+});
+
+// Multi-source evidence search (runs serially to respect rate limits)
+app.post('/api/knows/multi', async (req, res) => {
+  watchdogStatus.apiQuotaUsed += 1;
+  const query = typeof req.body?.query === 'string' ? req.body.query : '';
+  const requested = Array.isArray(req.body?.sources) ? req.body.sources : [];
+  const sources = requested.filter(isKnowsSource) as KnowsSource[];
+  if (!query.trim()) {
+    return res.status(400).json({ status: 'error', message: '缺少 query。' });
+  }
+  if (sources.length === 0) {
+    return res.status(400).json({ status: 'error', message: `sources 至少包含一个: ${KNOWS_SOURCE_IDS.join(', ')}` });
+  }
+
+  const results = await knowsMultiSearch({
+    sources,
+    query,
+    apiKey: process.env.KNOWS_API_KEY,
+    baseUrl: process.env.KNOWS_BASE_URL
+  });
+
+  res.json({
+    status: 'ok',
+    query,
+    groups: results.map((r) => ({
+      source: r.source,
+      ok: r.ok,
+      reason: r.reason,
+      questionId: r.questionId,
+      items: r.ok ? normalizeEvidences(r.evidences, r.source) : []
+    }))
+  });
+});
+
+// P1: Condition-related papers (PubMed via Europe PMC)
+app.post('/api/personal/literature', async (req, res) => {
+  watchdogStatus.apiQuotaUsed += 1;
+  const profile = profileFromBody(req.body);
+  const query = deriveQuery(profile);
+  const term = (req.body?.term && String(req.body.term).trim()) || buildSearchTerm(query);
+  const yearFrom = Number.isFinite(req.body?.yearFrom) ? Number(req.body.yearFrom) : 2023;
+  const limit = Number.isFinite(req.body?.limit) ? Number(req.body.limit) : 15;
+
+  const result = await searchPapers({ query: term, yearFrom, limit });
+  res.json({
+    status: 'ok',
+    term,
+    mode: result.ok ? 'live' : 'unavailable',
+    reason: result.reason,
+    items: result.items
+  });
+});
+
+// P1: Condition-matched recruiting clinical trials (ClinicalTrials.gov)
+app.post('/api/personal/trials', async (req, res) => {
+  watchdogStatus.apiQuotaUsed += 1;
+  const profile = profileFromBody(req.body);
+  const query = deriveQuery(profile);
+  const term = (req.body?.term && String(req.body.term).trim()) || buildSearchTerm(query);
+  const limit = Number.isFinite(req.body?.limit) ? Number(req.body.limit) : 8;
+  const status = typeof req.body?.status === 'string' ? req.body.status : 'RECRUITING';
+
+  const result = await searchTrials({ term, limit, status });
+  res.json({
+    status: 'ok',
+    term,
+    mode: result.ok ? 'live' : 'unavailable',
+    reason: result.reason,
+    items: result.items
+  });
+});
+
+// P1: Personalized news windows (reuses the shared news pipeline)
+app.post('/api/personal/feed', async (req, res) => {
+  watchdogStatus.apiQuotaUsed += 1;
+  const profile = profileFromBody(req.body);
+  const query = deriveQuery(profile);
+  const window = typeof req.body?.window === 'string' ? req.body.window : '30d';
+
+  try {
+    const refreshed = await refreshNewsWindows({
+      query: query.newsQuery,
+      observedAt: new Date().toISOString(),
+      knowsApiKey: process.env.KNOWS_API_KEY,
+      knowsBaseUrl: process.env.KNOWS_BASE_URL,
+      sourceKey: 'knows',
+      freshnessWindows: ['24h', '7d', '30d']
+    });
+    const mapped = mapNewsItems(refreshed.items);
+    const windows = refreshed.windows.map((w) => ({ label: w.label, items: mapNewsItems(w.items) }));
+    const selected = windows.find((w) => w.label === window);
+    res.json({
+      status: 'ok',
+      selectedWindow: window,
+      query: query.newsQuery,
+      mode: refreshed.mode,
+      refreshedAt: refreshed.refreshedAt,
+      data: selected?.items || mapped,
+      windows
+    });
+  } catch (err: any) {
+    res.json({ status: 'ok', selectedWindow: window, mode: 'fallback', data: [], windows: [], reason: err?.message });
+  }
+});
+
+// P1: Zero-hallucination personalized review (papers + trials + verified synthesis)
+app.post('/api/personal/review', async (req, res) => {
+  watchdogStatus.apiQuotaUsed += 1;
+  const profile = profileFromBody(req.body);
+  const query = deriveQuery(profile);
+  const term = (req.body?.term && String(req.body.term).trim()) || buildSearchTerm(query);
+  const config = resolveLlmConfig(req.body?.config);
+
+  const [papersResult, trialsResult] = await Promise.all([
+    searchPapers({ query: term, yearFrom: req.body?.yearFrom || 2023, limit: req.body?.limit || 15 }),
+    searchTrials({ term, limit: req.body?.nTrials || 8 })
+  ]);
+
+  const review = await synthesizeReview({
+    query,
+    papers: papersResult.items,
+    trials: trialsResult.items,
+    config
+  });
+
+  res.json({
+    status: 'ok',
+    term,
+    review,
+    papers: papersResult.items,
+    trials: trialsResult.items,
+    sources: {
+      papers: papersResult.ok ? 'live' : 'unavailable',
+      trials: trialsResult.ok ? 'live' : 'unavailable'
+    }
+  });
+});
+
+// P1: Grounded personalized assistant (profile + retrieved context injected)
+app.post('/api/personal/assistant', async (req, res) => {
+  watchdogStatus.apiQuotaUsed += 1;
+  const { messages, context } = req.body;
+  if (!messages || !Array.isArray(messages)) {
+    return res.status(400).json({ status: 'error', message: '消息历史不合规。' });
+  }
+  const profile = profileFromBody(req.body);
+  const query = deriveQuery(profile);
+
+  // Optional KnowS evidence grounding (single source to respect rate limits).
+  let knowsContext = '';
+  if (req.body?.useKnows) {
+    const lastUser = [...messages].reverse().find((m: any) => m.role === 'user');
+    const knowsQuery = (lastUser?.content || query.newsQuery || 'pancreatic cancer').slice(0, 300);
+    const knowsResult = await knowsSearch({
+      source: 'paper_en',
+      query: knowsQuery,
+      apiKey: process.env.KNOWS_API_KEY,
+      baseUrl: process.env.KNOWS_BASE_URL
+    });
+    if (knowsResult.ok && knowsResult.evidences.length > 0) {
+      const evs = normalizeEvidences(knowsResult.evidences, 'paper_en').slice(0, 6);
+      knowsContext = evs
+        .map((e) => `KnowS:${e.id} ${e.title}${e.journal ? ` (${e.journal})` : ''}`)
+        .join('\n');
+    }
+  }
+
+  const profileBlock = profile
+    ? `【患者脱敏画像】常驻城市:${query.city || '未填'} | 突变靶点:${query.genes.join(', ') || '未填'} | IHC:${profile.ihcResults || '未填'} | 方案:${profile.regimen || '未填'} | 疗效:${profile.efficacy || '未填'}`
+    : '【患者脱敏画像】未配置';
+  const contextBlock = (() => {
+    const parts: string[] = [];
+    if (typeof context === 'string' && context.trim()) parts.push(context.slice(0, 4000));
+    if (knowsContext) parts.push(`KnowS 循证检索：\n${knowsContext}`);
+    return parts.length ? `\n【已检索证据上下文】\n${parts.join('\n')}` : '';
+  })();
+
+  const systemInstruction = [
+    '你是胰腺癌个性化开源情报(OSINTel)的临床科研辅助助手，用简体中文回答。',
+    '结合患者脱敏画像与已检索证据上下文作答，引用证据时使用上下文中真实的 PMID/NCT，不要编造。',
+    '在结尾用一句话提示：本回答仅供科研参考，不能替代主治医生与 MDT 的诊疗意见。',
+    profileBlock,
+    contextBlock
+  ].join('\n');
+
+  const turns = messages.map((m: any) => ({
+    role: (m.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
+    content: m.content || ''
+  }));
+
+  // 1. Client-provided provider key, else server-side .env LLM
+  const config = resolveLlmConfig(req.body?.config);
+  const result = await callChatModel({ config, systemInstruction, messages: turns, temperature: 0.6 });
+  if (result.ok) {
+    return res.json({ status: 'ok', text: result.text, mode: 'provider' });
+  }
+
+  // 2. Fall back to server-hosted Gemini if available
+  const serverGeminiClient = getGeminiClient();
+  if (serverGeminiClient) {
+    try {
+      const lastQ = turns[turns.length - 1]?.content || '';
+      const response = await generateContentWithFallback(serverGeminiClient, {
+        contents: [{ role: 'user', parts: [{ text: lastQ }] }],
+        config: { systemInstruction, temperature: 0.6 }
+      });
+      if (response.text) {
+        return res.json({ status: 'ok', text: response.text, mode: 'server_gemini' });
+      }
+    } catch (_) {
+      // continue to simulated fallback
+    }
+  }
+
+  // 3. Simulated grounded fallback
+  const lastUserQuery = turns[turns.length - 1]?.content || '';
+  return res.json({
+    status: 'ok',
+    mode: 'simulated',
+    text: `### 个性化研判（仿真兜底）\n\n针对您的咨询：「${lastUserQuery}」，系统结合您的脱敏画像（突变靶点：${query.genes.join(', ') || '未配置'}）给出方向性建议。当前未连通大模型，以下为内置循证要点：\n\n- **靶向**：胰腺导管腺癌 90%+ 携带 KRAS 突变，G12D 非共价抑制剂(如 MRTX1133)在多中心临床探索中。\n- **支持治疗**：外分泌功能不全建议随餐补充高活性胰酶(PERT)，不可空腹或饭后吞服。\n\n*本回答仅供科研参考，不能替代主治医生与 MDT 的诊疗意见。*`
+  });
+});
+
+// P1: Batch LLM translation for English research content (papers/trials/news)
+app.post('/api/personal/translate', async (req, res) => {
+  watchdogStatus.apiQuotaUsed += 1;
+  const { items, config: clientConfig } = req.body;
+  if (!Array.isArray(items) || items.length === 0) {
+    return res.json({ status: 'ok', mode: 'empty', translations: {} });
+  }
+  const config = resolveLlmConfig(clientConfig);
+
+  // Cap payload to protect the token budget.
+  const payload = items.slice(0, 24).map((i: any) => ({
+    id: String(i.id),
+    title: String(i.title || '').slice(0, 300),
+    abstract: String(i.abstract || '').slice(0, 600)
+  }));
+
+  const systemInstruction = [
+    '你是专业医学翻译。把每个条目翻译成简体中文。',
+    '保留基因/药物/靶点/PMID/NCT 等专有标识原样不译(如 KRAS G12D、FOLFIRINOX、NCT05123456)。',
+    '输出严格 JSON，键为条目 id，值为 {"title":中文标题,"summary":中文摘要}。',
+    'summary 为 abstract 的 2-3 句中文凝练；若 abstract 为空则 summary 为空字符串。',
+    '不要输出 JSON 以外的任何文字，不要用代码块包裹。'
+  ].join('\n');
+
+  const userPrompt = JSON.stringify(payload);
+
+  function parseTranslations(text: string): Record<string, { title?: string; summary?: string }> | null {
+    try {
+      let content = text.trim();
+      if (content.startsWith('```')) {
+        content = content.replace(/^```[a-zA-Z]*\s*/, '').replace(/\s*```$/, '').trim();
+      }
+      const parsed = JSON.parse(content);
+      if (parsed && typeof parsed === 'object') return parsed;
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  // 1. Client-provided provider key
+  const result = await callChatModel({
+    config,
+    systemInstruction,
+    messages: [{ role: 'user', content: userPrompt }],
+    temperature: 0.2,
+    timeoutMs: 60000
+  });
+  if (result.ok) {
+    const translations = parseTranslations(result.text);
+    if (translations) {
+      return res.json({ status: 'ok', mode: 'provider', translations });
+    }
+  }
+
+  // 2. Server-hosted Gemini fallback
+  const serverGeminiClient = getGeminiClient();
+  if (serverGeminiClient) {
+    try {
+      const response = await generateContentWithFallback(serverGeminiClient, {
+        contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
+        config: { systemInstruction, temperature: 0.2, responseMimeType: 'application/json' }
+      });
+      if (response.text) {
+        const translations = parseTranslations(response.text);
+        if (translations) {
+          return res.json({ status: 'ok', mode: 'server_gemini', translations });
+        }
+      }
+    } catch (_) {
+      // fall through
+    }
+  }
+
+  // 3. No translation engine available
+  return res.json({
+    status: 'ok',
+    mode: 'unavailable',
+    translations: {},
+    message: '未连通可用的大模型翻译引擎，请在配置面板填入 LLM API Key 后重试。'
+  });
+});
+
 // 10. Multi-Provider AI Elements Custom Gateway Proxy Endpoint
 app.post('/api/osint/chat-custom', async (req, res) => {
   const { messages, config, attachments } = req.body;
@@ -888,6 +1441,28 @@ app.post('/api/osint/chat-custom', async (req, res) => {
         text: `${promptText}\n\n1.  **KRAS G12D 前沿**：针对胰腺导管腺癌 90%+ 的 KRAS 突变，非共价抑制剂 **MRTX1133** 已在 2026 年进行广泛多中心探索。临床一期结果证实具有优越的靶向选择性和极佳耐受性，目前正在多中心加速招募晚期经治患者。\n2.  **胰酶 PERT 标准 dosage**：根据 NCCN 指南和 EPI 专家共识，患者术后由于外分泌受损，严禁饭后吞服胰酶，必须随餐服用，推荐每主餐 50,000 - 75,000 单位胰酶活性颗粒，配合中链甘油三酯维持基本体重能量需求。`,
         reasoning: `【自动故障防御推理流】\n诊断原因: 连接到 ${provider} (${rawModel}) 时遭遇报错 ${proxyError.message}。\n防御措施: 激活本系统第35号临床保障方案，匹配医学图谱，返回极高拟合度的仿真对话并标记异常。`,
         reasoningTimeMs: 1240
+      });
+    }
+  }
+
+  // 1.5 No client API key: try the server-side .env LLM (OpenAI-compatible, e.g. StepFun)
+  const envLlm = serverLlmConfig();
+  if (envLlm) {
+    const envResult = await callChatModel({
+      config: envLlm,
+      systemInstruction: '你是一个优秀的AI临床科研辅助专家，用简体中文回答。',
+      messages: messages.map((m: any) => ({
+        role: m.role === 'user' ? 'user' : 'assistant',
+        content: m.content || ''
+      })),
+      temperature: 0.6
+    });
+    if (envResult.ok) {
+      return res.json({
+        status: 'ok',
+        text: envResult.text,
+        reasoning: `[服务端托管 LLM]\n提供商: ${envLlm.provider} | 模型: ${envLlm.model}\n来源: .env 服务端配置（未检测到前端私有 Key）。`,
+        reasoningTimeMs: 900
       });
     }
   }

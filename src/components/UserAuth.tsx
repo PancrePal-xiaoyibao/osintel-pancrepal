@@ -49,6 +49,7 @@ export default function UserAuth({
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
+  const [username, setUsername] = useState('');
   
   // Feedback
   const [error, setError] = useState<string | null>(null);
@@ -117,6 +118,54 @@ export default function UserAuth({
     }
   };
 
+  const handleLocalAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!username || !password) {
+      setError(language === 'ZH' ? '请填写用户名和密码！' : 'Please enter username and password!');
+      return;
+    }
+    setIsLoading(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const endpoint = mode === 'login' ? '/api/auth/login' : '/api/auth/register';
+      const resp = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password, displayName })
+      });
+      const data = await resp.json();
+      if (data.status !== 'ok') {
+        setError(data.message || (language === 'ZH' ? '认证失败' : 'Auth failed'));
+        return;
+      }
+      if (mode === 'register') {
+        setSuccess(language === 'ZH' ? '注册成功，请使用账号登录。' : 'Registered! Please sign in.');
+        setMode('login');
+        return;
+      }
+      // Login success: persist local session and notify parent.
+      try {
+        localStorage.setItem('pancreas_local_auth', JSON.stringify({ token: data.token, user: data.user }));
+      } catch (_) {
+        // ignore storage failures
+      }
+      const u = { ...data.user, photoURL: null, emailVerified: true };
+      setUser(u);
+      setIsDemoUser(true);
+      onUserChanged(u, true);
+      setSuccess(language === 'ZH' ? '登录成功，正在进入...' : 'Login successful...');
+      setTimeout(() => {
+        setIsOpen(false);
+        setSuccess(null);
+      }, 700);
+    } catch (_) {
+      setError(language === 'ZH' ? '网络错误，请稍后重试。' : 'Network error, try again.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleDemoLogin = () => {
     setIsLoading(true);
     setError(null);
@@ -144,6 +193,11 @@ export default function UserAuth({
 
   const handleLogout = async () => {
     try {
+      try {
+        localStorage.removeItem('pancreas_local_auth');
+      } catch (_) {
+        // ignore
+      }
       if (isDemoUser) {
         setUser(null);
         setIsDemoUser(false);
@@ -341,11 +395,11 @@ export default function UserAuth({
         </div>
         
         <h3 className="text-sm font-bold text-white tracking-widest uppercase mb-1 font-sans">
-          {language === 'ZH' ? '学术循证控制中心快速登录' : 'Authorized Access Center'}
+          {language === 'ZH' ? '快速登录' : 'Quick Login'}
         </h3>
         <p className="text-[10.5px] text-zinc-400 leading-relaxed mb-6 max-w-xs">
           {language === 'ZH'
-            ? '请点击下方一键快速登录。免密激活病情画像云同步及多模型自愈沙盒。'
+            ? '点击下方一键登录，免密体验完整功能。'
             : 'Click below to instantly activate client-server intelligence and profiles backup.'}
         </p>
 
@@ -380,6 +434,67 @@ export default function UserAuth({
             </>
           )}
         </button>
+
+        {/* Local username/password (test-friendly, .env default account) */}
+        <form onSubmit={handleLocalAuth} className="mt-5 w-full space-y-2.5 text-left">
+          <div className="relative flex items-center justify-center py-0.5">
+            <div className="absolute inset-0 border-t border-white/5"></div>
+            <span className="relative bg-[#0d0d11] px-2 text-[8px] text-zinc-500 uppercase tracking-widest font-mono">
+              {language === 'ZH' ? '账号密码登录 / 注册（测试）' : 'Username / Password (test)'}
+            </span>
+          </div>
+          {mode === 'register' && (
+            <input
+              type="text"
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
+              placeholder={language === 'ZH' ? '昵称（可选）' : 'Display name (optional)'}
+              className="w-full bg-zinc-900 border border-white/10 hover:border-white/15 rounded-xl px-3 py-1.5 text-xs text-white placeholder-zinc-650 focus:outline-none focus:ring-1 focus:ring-teal-500/40 font-mono"
+            />
+          )}
+          <div className="relative">
+            <span className="absolute left-3 top-2 text-zinc-500"><UserIcon className="h-3.5 w-3.5" /></span>
+            <input
+              type="text"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder={language === 'ZH' ? '用户名 (默认 admin)' : 'Username (default admin)'}
+              className="w-full bg-zinc-900 border border-white/10 hover:border-white/15 rounded-xl pl-9 pr-3 py-1.5 text-xs text-white placeholder-zinc-650 focus:outline-none focus:ring-1 focus:ring-teal-500/40 font-mono"
+            />
+          </div>
+          <div className="relative">
+            <span className="absolute left-3 top-2 text-zinc-500"><Lock className="h-3.5 w-3.5" /></span>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder={language === 'ZH' ? '密码 (默认 pancreas123)' : 'Password (default pancreas123)'}
+              className="w-full bg-zinc-900 border border-white/10 hover:border-white/15 rounded-xl pl-9 pr-3 py-1.5 text-xs text-white placeholder-zinc-650 focus:outline-none focus:ring-1 focus:ring-teal-500/40 font-mono"
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={isLoading}
+            className="w-full py-2 bg-teal-700 hover:bg-teal-600 text-white rounded-xl text-[11px] font-bold cursor-pointer transition flex justify-center items-center gap-1.5"
+          >
+            {isLoading ? (
+              <div className="h-3.5 w-3.5 rounded-full border-2 border-white/20 border-t-white animate-spin"></div>
+            ) : (
+              <span>{mode === 'login' ? (language === 'ZH' ? '账号登录' : 'Sign In') : (language === 'ZH' ? '账号注册' : 'Register')}</span>
+            )}
+          </button>
+          <div className="text-center">
+            <button
+              type="button"
+              onClick={() => setMode(mode === 'login' ? 'register' : 'login')}
+              className="text-[9px] text-zinc-500 hover:text-teal-400 transition cursor-pointer underline"
+            >
+              {mode === 'login'
+                ? (language === 'ZH' ? '没有账号？点此注册' : 'No account? Register')
+                : (language === 'ZH' ? '已有账号？切换登录' : 'Have an account? Sign in')}
+            </button>
+          </div>
+        </form>
 
         {/* Collapsible toggle for Advanced methods (Google/Email) */}
         <div className="mt-5 w-full">
