@@ -395,11 +395,11 @@ export default function UserAuth({
         </div>
         
         <h3 className="text-sm font-bold text-white tracking-widest uppercase mb-1 font-sans">
-          {language === 'ZH' ? '学术循证控制中心快速登录' : 'Authorized Access Center'}
+          {language === 'ZH' ? '快速登录' : 'Quick Login'}
         </h3>
         <p className="text-[10.5px] text-zinc-400 leading-relaxed mb-6 max-w-xs">
           {language === 'ZH'
-            ? '请点击下方一键快速登录。免密激活病情画像云同步及多模型自愈沙盒。'
+            ? '点击下方一键登录，免密体验完整功能。'
             : 'Click below to instantly activate client-server intelligence and profiles backup.'}
         </p>
 
