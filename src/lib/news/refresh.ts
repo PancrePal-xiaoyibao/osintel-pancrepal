@@ -8,6 +8,8 @@ import {
   type NewsWindow,
   type NewsWindowLabel
 } from './pipeline.ts';
+// Side-effect import: registers all 12 search providers in the registry.
+import '../search/providers/index';
 import { searchAggregate } from '../search/index';
 import type { AggregateResult, SearchResult } from '../search/types';
 
