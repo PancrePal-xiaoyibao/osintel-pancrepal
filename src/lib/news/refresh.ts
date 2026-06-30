@@ -29,6 +29,8 @@ export type NewsRefreshOptions = {
   enableAnySearch?: boolean;
   /** @deprecated Not used by the unified search module. */
   sourceKey?: string;
+  /** Optional callback to stream pipeline log lines (for live UI console). */
+  onLog?: (line: string) => void;
 };
 
 export type NewsRefreshResult = {
@@ -182,7 +184,8 @@ export async function refreshNewsWindows(options: NewsRefreshOptions): Promise<N
   // Use the unified search module to fan out to all registered providers
   const aggregateResult: AggregateResult = await searchAggregate(query, {
     freshness: 'week',
-    env: process.env as Record<string, string | undefined>
+    env: process.env as Record<string, string | undefined>,
+    onLog: options.onLog
   });
 
   // Map ProviderStatus[] to the sources format expected by NewsRefreshResult
@@ -202,7 +205,9 @@ export async function refreshNewsWindows(options: NewsRefreshOptions): Promise<N
   const windows = buildNewsRefreshWindow({ items: ranked, freshnessWindows }).windows;
 
   const winSummary = windows.map((w) => `${w.label}:${w.items.length}`).join(' ');
-  console.log(`[feed] normalized ${normalized.length} → ranked ${ranked.length} items | windows ${winSummary} | mode=${aggregateResult.mode === 'fallback' ? 'fallback' : 'aggregate'}`);
+  const feedLine = `[feed] normalized ${normalized.length} → ranked ${ranked.length} items | windows ${winSummary} | mode=${aggregateResult.mode === 'fallback' ? 'fallback' : 'aggregate'}`;
+  console.log(feedLine);
+  try { options.onLog?.(feedLine); } catch { /* ignore */ }
 
   return {
     items: ranked,

@@ -31,14 +31,18 @@ function recordSuccess(id: string): void {
 
 export async function searchAggregate(
   query: string,
-  options: SearchOptions & { env?: Record<string, string | undefined> } = {}
+  options: SearchOptions & { env?: Record<string, string | undefined>; onLog?: (line: string) => void } = {}
 ): Promise<AggregateResult> {
   const env = options.env ?? (process.env as Record<string, string | undefined>);
+  const log = (line: string) => {
+    console.log(line);
+    try { options.onLog?.(line); } catch { /* ignore */ }
+  };
 
   // Check cache first
   const cached = getCached(query, options.kinds);
   if (cached) {
-    console.log(`[search] query="${query}" → cache HIT (${cached.results.length} results, served from memory)`);
+    log(`[search] query="${query}" → cache HIT (${cached.results.length} results, served from memory)`);
     return cached;
   }
 
@@ -47,8 +51,8 @@ export async function searchAggregate(
   );
 
   const t0 = Date.now();
-  console.log(`\n┌─ [search] query="${query}"`);
-  console.log(`│  providers (${enabled.length}): ${enabled.map((p) => `${p.id}(${p.kind})`).join(', ')}`);
+  log(`┌─ search query="${query}"`);
+  log(`│  dispatching ${enabled.length} providers: ${enabled.map((p) => p.id).join(', ')}`);
 
   const timeout = options.timeoutMs ?? 20000;
   const settled = await Promise.allSettled(
@@ -57,13 +61,12 @@ export async function searchAggregate(
       try {
         const results = await provider.search(query, { ...options, timeoutMs: timeout });
         const ms = Date.now() - start;
-        // Live per-provider progress line as each finishes.
-        const sample = results[0]?.title ? ` | top: "${results[0].title.slice(0, 60)}"` : '';
-        console.log(`│  ✓ ${provider.id.padEnd(16)} ${String(results.length).padStart(3)} results  ${String(ms).padStart(5)}ms${sample}`);
+        const sample = results[0]?.title ? ` | "${results[0].title.slice(0, 52)}"` : '';
+        log(`│  ✓ ${provider.id.padEnd(16)} ${String(results.length).padStart(3)} hits ${String(ms).padStart(5)}ms${sample}`);
         return { provider, results, durationMs: ms };
       } catch (err) {
         const ms = Date.now() - start;
-        console.log(`│  ✗ ${provider.id.padEnd(16)} FAILED        ${String(ms).padStart(5)}ms | ${err instanceof Error ? err.message : 'error'}`);
+        log(`│  ✗ ${provider.id.padEnd(16)} FAIL    ${String(ms).padStart(5)}ms | ${err instanceof Error ? err.message : 'error'}`);
         throw err;
       }
     })
@@ -108,7 +111,7 @@ export async function searchAggregate(
   });
 
   const dupCount = allResults.length - deduped.length;
-  console.log(`│  extract: ${allResults.length} raw → ${deduped.length} unique (${dupCount} duplicates removed)`);
+  log(`│  extract: ${allResults.length} raw → ${deduped.length} unique (${dupCount} dup removed)`);
 
   // Breakdown by kind for presentation visibility
   const byKind = deduped.reduce<Record<string, number>>((acc, r) => {
@@ -130,8 +133,8 @@ export async function searchAggregate(
       persisted.mode = 'aggregate';
       persisted.cachedAt = 'disk';
       setCache(query, options.kinds, persisted);
-      console.log(`│  ⚠ no live results — loaded ${persisted.results.length} from disk cache`);
-      console.log(`└─ done in ${Date.now() - t0}ms (mode=disk-fallback)\n`);
+      log(`│  ⚠ no live results — loaded ${persisted.results.length} from disk cache`);
+      log(`└─ done in ${Date.now() - t0}ms (mode=disk-fallback)`);
       return persisted;
     }
   }
@@ -140,8 +143,8 @@ export async function searchAggregate(
   setCache(query, options.kinds, result);
 
   const okCount = statuses.filter((s) => s.ok && s.count > 0).length;
-  console.log(`│  present: ${deduped.length} items [${kindSummary}] from ${okCount}/${enabled.length} live sources`);
-  console.log(`└─ done in ${Date.now() - t0}ms (mode=${result.mode})\n`);
+  log(`│  present: ${deduped.length} items [${kindSummary}] from ${okCount}/${enabled.length} live sources`);
+  log(`└─ done in ${Date.now() - t0}ms (mode=${result.mode})`);
 
   return result;
 }
