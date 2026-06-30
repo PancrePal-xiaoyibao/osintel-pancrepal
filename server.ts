@@ -82,11 +82,12 @@ function mapNewsItems(items: Array<Awaited<ReturnType<typeof refreshNewsWindows>
   }));
 }
 
-async function refreshNewsFeed(query = 'pancreatic cancer') {
+async function refreshNewsFeed(query = 'pancreatic cancer', onLog?: (line: string) => void) {
   const refreshed = await refreshNewsWindows({
     query,
     observedAt: new Date().toISOString(),
-    freshnessWindows: ['24h', '7d', '30d']
+    freshnessWindows: ['24h', '7d', '30d'],
+    onLog
   });
 
   const mapped = mapNewsItems(refreshed.items);
@@ -232,6 +233,45 @@ app.post('/api/osint/feed/refresh', async (req, res) => {
   });
 });
 
+// SSE streaming refresh: emits live log lines as the search runs, then a final
+// 'done' event with the feed data. Powers the live terminal console on the homepage.
+app.get('/api/osint/feed/refresh-stream', async (req, res) => {
+  const query = typeof req.query.query === 'string' && req.query.query.trim()
+    ? req.query.query.trim()
+    : 'pancreatic cancer';
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no'
+  });
+
+  const send = (event: string, data: unknown) => {
+    res.write(`event: ${event}\n`);
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+  };
+
+  send('log', { line: `▶ 启动全节点检索: "${query}"` });
+
+  try {
+    const snapshot = await refreshNewsFeed(query, (line) => send('log', { line }));
+    send('done', {
+      status: 'ok',
+      mode: snapshot.mode,
+      sources: snapshot.sources,
+      data: snapshot.items,
+      windows: snapshot.windows,
+      refreshedAt: snapshot.refreshedAt
+    });
+  } catch (err) {
+    send('log', { line: `✗ 检索失败: ${err instanceof Error ? err.message : 'unknown error'}` });
+    send('error', { message: err instanceof Error ? err.message : 'unknown error' });
+  } finally {
+    res.end();
+  }
+});
+
 // Serve the latest persisted search results from disk (instant, no re-search).
 // The background auto-refresh keeps this file fresh every 5 minutes.
 // Frontend polls this endpoint for the stream feed.
@@ -240,7 +280,7 @@ app.get('/api/osint/feed/cached', (req, res) => {
     const cacheDir = path.resolve(process.cwd(), 'data', 'search-cache');
     // Default query file
     const queryParam = typeof req.query.q === 'string' ? req.query.q : 'pancreatic cancer';
-    const safeKey = queryParam.toLowerCase().trim().replace(/[^a-z0-9_-]/gi, '_').slice(0, 120) + '.json';
+    const safeKey = (queryParam.toLowerCase().trim() + '|').replace(/[^a-z0-9_-]/gi, '_').slice(0, 120) + '.json';
     const filePath = path.join(cacheDir, safeKey);
 
     if (!fs.existsSync(filePath)) {
