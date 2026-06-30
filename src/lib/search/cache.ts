@@ -74,6 +74,8 @@ function persistToFile(key: string, query: string, result: AggregateResult): voi
     const latestPath = path.join(PERSIST_DIR, toFilename(key));
     fs.writeFileSync(latestPath, JSON.stringify(payload, null, 2), 'utf-8');
 
+    console.log(`[persist] saved ${result.results.length} results → data/search-cache/${toFilename(key)}`);
+
     // Also append to a time-series log (one line per search, NDJSON)
     const logPath = path.join(PERSIST_DIR, '_search-log.ndjson');
     const logEntry = JSON.stringify({

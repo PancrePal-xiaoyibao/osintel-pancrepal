@@ -31,26 +31,44 @@ function recordSuccess(id: string): void {
 
 export async function searchAggregate(
   query: string,
-  options: SearchOptions & { env?: Record<string, string | undefined> } = {}
+  options: SearchOptions & { env?: Record<string, string | undefined>; onLog?: (line: string) => void } = {}
 ): Promise<AggregateResult> {
   const env = options.env ?? (process.env as Record<string, string | undefined>);
+  const log = (line: string) => {
+    console.log(line);
+    try { options.onLog?.(line); } catch { /* ignore */ }
+  };
 
   // Check cache first
   const cached = getCached(query, options.kinds);
-  if (cached) return cached;
+  if (cached) {
+    log(`[search] query="${query}" → cache HIT (${cached.results.length} results, served from memory)`);
+    return cached;
+  }
 
   const enabled = getEnabledProviders(env, options.kinds).filter(
     (p) => !isCircuitOpen(p.id)
   );
 
-  console.log(`[search] query="${query}" | ${enabled.length} providers enabled: ${enabled.map(p => p.id).join(', ')}`);
+  const t0 = Date.now();
+  log(`┌─ search query="${query}"`);
+  log(`│  dispatching ${enabled.length} providers: ${enabled.map((p) => p.id).join(', ')}`);
 
   const timeout = options.timeoutMs ?? 20000;
   const settled = await Promise.allSettled(
     enabled.map(async (provider) => {
       const start = Date.now();
-      const results = await provider.search(query, { ...options, timeoutMs: timeout });
-      return { provider, results, durationMs: Date.now() - start };
+      try {
+        const results = await provider.search(query, { ...options, timeoutMs: timeout });
+        const ms = Date.now() - start;
+        const sample = results[0]?.title ? ` | "${results[0].title.slice(0, 52)}"` : '';
+        log(`│  ✓ ${provider.id.padEnd(16)} ${String(results.length).padStart(3)} hits ${String(ms).padStart(5)}ms${sample}`);
+        return { provider, results, durationMs: ms };
+      } catch (err) {
+        const ms = Date.now() - start;
+        log(`│  ✗ ${provider.id.padEnd(16)} FAIL    ${String(ms).padStart(5)}ms | ${err instanceof Error ? err.message : 'error'}`);
+        throw err;
+      }
     })
   );
 
@@ -92,6 +110,16 @@ export async function searchAggregate(
     return true;
   });
 
+  const dupCount = allResults.length - deduped.length;
+  log(`│  extract: ${allResults.length} raw → ${deduped.length} unique (${dupCount} dup removed)`);
+
+  // Breakdown by kind for presentation visibility
+  const byKind = deduped.reduce<Record<string, number>>((acc, r) => {
+    acc[r.kind] = (acc[r.kind] || 0) + 1;
+    return acc;
+  }, {});
+  const kindSummary = Object.entries(byKind).map(([k, n]) => `${k}:${n}`).join(' ');
+
   const result: AggregateResult = {
     results: deduped,
     providers: statuses,
@@ -104,14 +132,19 @@ export async function searchAggregate(
     if (persisted && persisted.results.length > 0) {
       persisted.mode = 'aggregate';
       persisted.cachedAt = 'disk';
-      // Still set in-memory cache so we don't re-read disk on next poll
       setCache(query, options.kinds, persisted);
+      log(`│  ⚠ no live results — loaded ${persisted.results.length} from disk cache`);
+      log(`└─ done in ${Date.now() - t0}ms (mode=disk-fallback)`);
       return persisted;
     }
   }
 
   // Set cache and persist to disk for future reuse
   setCache(query, options.kinds, result);
+
+  const okCount = statuses.filter((s) => s.ok && s.count > 0).length;
+  log(`│  present: ${deduped.length} items [${kindSummary}] from ${okCount}/${enabled.length} live sources`);
+  log(`└─ done in ${Date.now() - t0}ms (mode=${result.mode})`);
 
   return result;
 }

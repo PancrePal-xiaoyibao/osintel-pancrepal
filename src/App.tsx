@@ -61,6 +61,7 @@ export default function App() {
   const [items, setItems] = useState<OSINTItem[]>([]);
   const [newsRefreshMode, setNewsRefreshMode] = useState<'aggregate' | 'knows' | 'fallback'>('fallback');
   const [newsSources, setNewsSources] = useState<Array<{ source: string; ok: boolean; count: number }>>([]);
+  const [searchLog, setSearchLog] = useState<string[]>([]);
   const [newsWindowLabel, setNewsWindowLabel] = useState<'24h' | '7d' | '30d'>('30d');
   const [centers, setCenters] = useState<ResourceCenter[]>([]);
   const [watchdog, setWatchdog] = useState<WatchdogStatus | null>(null);
@@ -280,31 +281,86 @@ export default function App() {
   };
 
   const handleNewsRefresh = async () => {
+    const query = feedSearchTerm || 'pancreatic cancer';
     setIsFetching(true);
-    setConsoleMsg('News refresh: querying KNOWS and rebuilding 24h/7d/30d windows...');
-    try {
-      const resp = await fetch('/api/osint/feed/refresh', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: feedSearchTerm || 'pancreatic cancer' })
-      });
-      const resObj = await resp.json();
-      if (resObj.status === 'ok') {
-        setItems(resObj.data || []);
-        setNewsRefreshMode(resObj.mode || 'fallback');
-        setNewsSources(resObj.sources || []);
-        setNewsWindowLabel((resObj.windows?.[0]?.label || '30d') as '24h' | '7d' | '30d');
-        const okSources = (resObj.sources || []).filter((s: { ok: boolean; count: number }) => s.ok && s.count > 0).length;
-        setConsoleMsg(`News refresh completed in ${resObj.mode || 'fallback'} mode (${okSources} live sources).`);
+    setSearchLog([]);
+    setConsoleMsg(`检索调度启动: "${query}"`);
+
+    // Stream live log lines from the server via SSE; update the feed on 'done'.
+    return new Promise<void>((resolve) => {
+      let settled = false;
+      let es: EventSource | null = null;
+      try {
+        es = new EventSource(`/api/osint/feed/refresh-stream?query=${encodeURIComponent(query)}`);
+      } catch {
+        // EventSource unavailable — fall back to POST below.
+      }
+
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        es?.close();
+        setIsFetching(false);
+        resolve();
+      };
+
+      // Safety timeout: if the stream stalls, fall back gracefully.
+      const timeout = setTimeout(() => {
+        setConsoleMsg('检索超时，保留现有情报快照。');
+        finish();
+      }, 90000);
+
+      if (!es) {
+        clearTimeout(timeout);
+        // Fallback: plain POST without streaming.
+        fetch('/api/osint/feed/refresh', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query })
+        })
+          .then((r) => r.json())
+          .then((resObj) => {
+            if (resObj.status === 'ok') {
+              setItems(resObj.data || []);
+              setNewsRefreshMode(resObj.mode || 'fallback');
+              setNewsSources(resObj.sources || []);
+            }
+          })
+          .finally(() => { setIsFetching(false); resolve(); });
         return;
       }
-      setConsoleMsg('News refresh returned an error status.');
-    } catch (err) {
-      console.error(err);
-      setConsoleMsg('News refresh failed; keeping existing feed snapshot.');
-    } finally {
-      setIsFetching(false);
-    }
+
+      es.addEventListener('log', (ev: MessageEvent) => {
+        try {
+          const { line } = JSON.parse(ev.data);
+          if (typeof line === 'string') {
+            setSearchLog((prev) => [...prev.slice(-200), line]);
+          }
+        } catch { /* ignore malformed */ }
+      });
+
+      es.addEventListener('done', (ev: MessageEvent) => {
+        clearTimeout(timeout);
+        try {
+          const resObj = JSON.parse(ev.data);
+          if (resObj.status === 'ok') {
+            setItems(resObj.data || []);
+            setNewsRefreshMode(resObj.mode || 'fallback');
+            setNewsSources(resObj.sources || []);
+            setNewsWindowLabel((resObj.windows?.[0]?.label || '30d') as '24h' | '7d' | '30d');
+            const okSources = (resObj.sources || []).filter((s: { ok: boolean; count: number }) => s.ok && s.count > 0).length;
+            setConsoleMsg(`检索完成: ${resObj.mode} 模式, ${okSources} 个实时信源, ${(resObj.data || []).length} 条情报。`);
+          }
+        } catch { /* ignore */ }
+        finish();
+      });
+
+      es.addEventListener('error', () => {
+        clearTimeout(timeout);
+        setConsoleMsg('检索连接中断，保留现有情报快照。');
+        finish();
+      });
+    });
   };
 
   const handleSaveProfile = (newProfile: PatientProfile) => {
@@ -354,7 +410,7 @@ export default function App() {
     async function loadInitialData() {
       try {
         const [feedRes, coordRes, dogRes, healthRes] = await Promise.all([
-          fetch('/api/osint/feed?window=30d'),
+          fetch('/api/osint/feed/cached'),  // Try cached file first (instant)
           fetch('/api/osint/resources'),
           fetch('/api/osint/watchdog'),
           fetch('/api/health')
@@ -365,7 +421,9 @@ export default function App() {
         const dogObj = await dogRes.json();
         const healthObj = await healthRes.json();
 
-        setItems(feedObj.data?.length ? feedObj.data : INITIAL_OSINT_FEED);
+        // If cached file has data, use it; otherwise fall back to live feed or seed
+        const feedItems = feedObj.data?.length ? feedObj.data : INITIAL_OSINT_FEED;
+        setItems(feedItems);
         setNewsRefreshMode(feedObj.mode || 'fallback');
         setNewsSources(feedObj.sources || []);
         setNewsWindowLabel((feedObj.selectedWindow || feedObj.windows?.[0]?.label || '30d') as '24h' | '7d' | '30d');
@@ -388,16 +446,16 @@ export default function App() {
     loadInitialData();
   }, []);
 
-  // Auto-refresh the news feed every 5 minutes (pre-designed cadence). The
-  // server caches multi-source aggregation for 5 minutes, so this poll keeps
-  // the homepage live without hammering the upstream search APIs.
+  // Auto-refresh the feed every 5 minutes by reading the persisted cache file.
+  // The backend auto-refreshes the file in the background, so the frontend just
+  // polls the cached endpoint (instant, no re-search latency).
   useEffect(() => {
     const timer = setInterval(() => {
-      fetch(`/api/osint/feed?window=${newsWindowLabel}`)
+      fetch('/api/osint/feed/cached')
         .then((res) => res.json())
         .then((obj) => {
-          if (obj.status === 'ok') {
-            setItems(obj.data || []);
+          if (obj.status === 'ok' && obj.data?.length > 0) {
+            setItems(obj.data);
             setNewsRefreshMode(obj.mode || 'fallback');
             setNewsSources(obj.sources || []);
           }
@@ -407,7 +465,7 @@ export default function App() {
         });
     }, 5 * 60 * 1000);
     return () => clearInterval(timer);
-  }, [newsWindowLabel]);
+  }, []);
 
   // Set up periodic polling for Watchdog telemetry metrics (e.g., CPU, API counts) to keep dashboard responsive
   useEffect(() => {
@@ -1028,6 +1086,7 @@ export default function App() {
                 newsRefreshMode={newsRefreshMode}
                 newsWindowLabel={newsWindowLabel}
                 newsSources={newsSources}
+                searchLog={searchLog}
                 onOpenSubmission={() => setIsSubmissionOpen(true)}
                 searchTerm={feedSearchTerm}
                 onSearchTermChange={setFeedSearchTerm}

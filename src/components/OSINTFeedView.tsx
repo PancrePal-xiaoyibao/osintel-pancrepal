@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { OSINTItem, OSINTCategory, EvidenceLevel, PatientProfile } from '../types';
 import WarRoomGlobe from './WarRoomGlobe';
 import { 
@@ -30,6 +30,7 @@ interface OSINTFeedProps {
   newsRefreshMode?: 'aggregate' | 'knows' | 'fallback';
   newsWindowLabel?: '24h' | '7d' | '30d';
   newsSources?: Array<{ source: string; ok: boolean; count: number }>;
+  searchLog?: string[];
   onOpenSubmission?: () => void;
   searchTerm?: string;
   onSearchTermChange?: (val: string) => void;
@@ -751,6 +752,7 @@ export default function OSINTFeedView({
   newsRefreshMode,
   newsWindowLabel,
   newsSources,
+  searchLog,
   onOpenSubmission,
   searchTerm,
   onSearchTermChange,
@@ -759,8 +761,7 @@ export default function OSINTFeedView({
   onNavigateToTab,
   language
 }: OSINTFeedProps) {
-  const [internalSearch, setInternalSearch] = useState('');
-  const activeSearch = searchTerm !== undefined ? searchTerm : internalSearch;
+  const [internalSearch, setInternalSearch] = useState('');  const activeSearch = searchTerm !== undefined ? searchTerm : internalSearch;
   const changeSearch = onSearchTermChange || setInternalSearch;
 
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
@@ -771,6 +772,12 @@ export default function OSINTFeedView({
   const [isSummarizing, setIsSummarizing] = useState(false);
   const [showSummaryModal, setShowSummaryModal] = useState(false);
   const [ingestSuccessText, setIngestSuccessText] = useState<string | null>(null);
+
+  // Auto-scroll the live search console to the latest line.
+  const consoleEndRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    consoleEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }, [searchLog]);
 
   const tLocal = uiTranslation[language] || uiTranslation['EN'];
 
@@ -1054,9 +1061,55 @@ export default function OSINTFeedView({
             </button>
           )}
 
-          {statusMessage && (
-            <div className="p-2.5 bg-black border border-white/5 rounded text-[11px] font-mono text-zinc-505 leading-snug">
-              <span className="text-blue-400">⚡ Console:</span> {statusMessage}
+          {/* Live search terminal console */}
+          {(isFetching || (searchLog && searchLog.length > 0) || statusMessage) && (
+            <div className="rounded-lg border border-white/10 bg-[#0a0a0c] overflow-hidden shadow-inner">
+              {/* Terminal title bar */}
+              <div className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-900/80 border-b border-white/10">
+                <span className="h-2.5 w-2.5 rounded-full bg-red-500/70"></span>
+                <span className="h-2.5 w-2.5 rounded-full bg-amber-500/70"></span>
+                <span className="h-2.5 w-2.5 rounded-full bg-emerald-500/70"></span>
+                <span className="ml-2 text-[10px] font-mono text-zinc-400 tracking-wider">
+                  osintel://search-console
+                </span>
+                {isFetching && (
+                  <span className="ml-auto flex items-center gap-1 text-[9px] font-mono text-emerald-400">
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                    LIVE
+                  </span>
+                )}
+              </div>
+              {/* Log body */}
+              <div className="h-56 overflow-y-auto px-3 py-2 text-[10.5px] font-mono leading-relaxed bg-[#0a0a0c]">
+                {(searchLog && searchLog.length > 0) ? (
+                  searchLog.map((line, i) => {
+                    const ok = line.includes('✓');
+                    const fail = line.includes('✗') || line.toLowerCase().includes('fail');
+                    const head = line.startsWith('┌') || line.startsWith('▶');
+                    const foot = line.startsWith('└') || line.includes('present:') || line.includes('[feed]');
+                    const cls = fail
+                      ? 'text-rose-400'
+                      : ok
+                        ? 'text-emerald-300'
+                        : head
+                          ? 'text-blue-400'
+                          : foot
+                            ? 'text-amber-300'
+                            : 'text-zinc-400';
+                    return (
+                      <div key={i} className={`whitespace-pre ${cls}`}>{line}</div>
+                    );
+                  })
+                ) : (
+                  <div className="text-zinc-500">
+                    <span className="text-blue-400">⚡ Console:</span> {statusMessage || '等待检索指令...'}
+                  </div>
+                )}
+                {isFetching && (
+                  <div className="text-emerald-400 animate-pulse">▌</div>
+                )}
+                <div ref={consoleEndRef} />
+              </div>
             </div>
           )}
         </div>
