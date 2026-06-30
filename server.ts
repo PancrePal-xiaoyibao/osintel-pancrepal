@@ -221,7 +221,15 @@ app.get('/api/osint/feed', async (req, res) => {
 app.post('/api/osint/feed/refresh', async (req, res) => {
   const query = typeof req.body?.query === 'string' ? req.body.query : 'pancreatic cancer';
   const snapshot = await refreshNewsFeed(query);
-  res.json({ status: 'ok', selectedWindow: '30d', ...snapshot });
+  res.json({
+    status: 'ok',
+    selectedWindow: '30d',
+    refreshedAt: snapshot.refreshedAt,
+    mode: snapshot.mode,
+    sources: snapshot.sources,
+    data: snapshot.items,
+    windows: snapshot.windows
+  });
 });
 
 // Serve the latest persisted search results from disk (instant, no re-search).
