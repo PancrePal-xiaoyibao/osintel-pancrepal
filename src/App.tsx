@@ -16,7 +16,7 @@ import HotspotDrugsView from './components/HotspotDrugsView';
 import { auth } from './firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { loadPatientProfileFromCloud, savePatientProfileToCloud, deletePatientProfileFromCloud } from './lib/firestore-sync';
-import { MOCK_15DAY_REPORT } from './seed-data';
+import { MOCK_15DAY_REPORT, INITIAL_OSINT_FEED, INITIAL_RESOURCE_CENTERS } from './seed-data';
 import { 
   Activity, 
   Terminal, 
@@ -350,12 +350,16 @@ export default function App() {
         const coordObj = await coordRes.json();
         const dogObj = await dogRes.json();
 
-        setItems(feedObj.data || []);
-        setCenters(coordObj.data || []);
+        setItems(feedObj.data?.length ? feedObj.data : INITIAL_OSINT_FEED);
+        setCenters(coordObj.data?.length ? coordObj.data : INITIAL_RESOURCE_CENTERS);
         setWatchdog(dogObj.data || null);
       } catch (err) {
         console.error('Failed to sync state from full-stack server endpoints, utilizing offline fallback:', err);
-        setConsoleMsg('API Server unreachable. System in isolated standalone local mode.');
+        // Frontend-only / static deploy fallback: render the bundled seed data
+        // so news, hospitals and treatments still appear without the API server.
+        setItems(INITIAL_OSINT_FEED);
+        setCenters(INITIAL_RESOURCE_CENTERS);
+        setConsoleMsg('API Server unreachable. Loaded bundled offline dataset (news + centers).');
       } finally {
         setIsLoading(false);
       }
