@@ -20,6 +20,14 @@ search, and a grounded AI assistant.
 - **Zero-hallucination literature review** — papers (Europe PMC) + trials
   (ClinicalTrials.gov) build a citation registry; the synthesis LLM is
   constrained to real ids and any fabricated PMID/NCT is dropped before render.
+- **Real-time aggregated news search (not a demo)** — the homepage feed fans out
+  to multiple real search capabilities in parallel and merges them into ranked
+  24h/7d/30d windows: **KnowS** (papers/guidelines/trials), **Europe PMC /
+  PubMed**, **ClinicalTrials.gov v2**, and **AnySearch** web/news. Every item
+  keeps its real source URL (citation-resolvable, no fabricated content). The
+  feed **auto-refreshes every 5 minutes** and the sidebar shows live per-source
+  status chips. New adapters (LLM-grounded search, MCP search) plug in via
+  `src/lib/news/aggregate.ts`.
 - **KnowS evidence search** — a shared client over the public KnowS OpenAPI
   (English/Chinese papers, meetings, guidelines, trials, package inserts) used by
   the news pipeline, the personalized routes, and the assistant. Falls back to
@@ -43,7 +51,7 @@ search, and a grounded AI assistant.
 - Backend: Express (single Node process, `server.ts`) as an API + LLM proxy
 - AI: `@google/genai` and any OpenAI-compatible provider
 - Data: Firebase (Auth/Firestore) for cloud profile sync; in-memory + seed data
-- External APIs: KnowS OpenAPI, Europe PMC, ClinicalTrials.gov v2
+- External APIs: KnowS OpenAPI, Europe PMC, ClinicalTrials.gov v2, AnySearch, Tavily, Serper/Google, Metaso, Brave, Exa, Semantic Scholar, OpenAlex
 
 ## Quick Start
 
@@ -57,6 +65,30 @@ npm run dev            # http://localhost:3000
 
 Default local login for testing: `admin` / `pancreas123` (configurable in `.env`).
 
+## Deployment: live data vs. static build (important)
+
+The news, hospitals, and treatment data are served by the Express API in
+`server.ts`. How you deploy decides whether the feed is **live** or **seed-only**:
+
+- **Full-stack (recommended, live data):** build and run the Node server so the
+  `/api/*` routes are available. The homepage news feed then performs real
+  multi-source aggregation (KnowS + PubMed + ClinicalTrials.gov + AnySearch) and
+  auto-refreshes every 5 minutes.
+  ```bash
+  npm run build
+  npm start        # serves the API + the built static frontend on one port
+  ```
+- **Static-only (frontend bundle, no Node server):** if you deploy just the
+  `dist/` output to a static host, the `/api/*` calls have no backend. The app
+  **gracefully falls back to the bundled seed dataset** so news, hospitals, and
+  treatments still render — but they are the packaged snapshot, **not** live
+  search results, and the 5-minute refresh has nothing live to pull.
+
+> Reminder: after changes, run `npm run lint` (type-check) and `npm run build`.
+> Redeploying `main` makes hospitals/news/treatments appear; for **real-time**
+> news you must run the Node server (`npm run build` → `npm start`). A pure
+> static deploy always shows the bundled seed data.
+
 ## Project Structure
 
 ```
@@ -68,6 +100,7 @@ Default local login for testing: `admin` / `pancreas123` (configurable in `.env`
 │   ├── lib/
 │   │   ├── knows/            # Shared KnowS evidence search client + normalizer
 │   │   ├── research/         # Europe PMC + ClinicalTrials.gov + zero-hallucination review
+│   │   ├── search/           # Unified pluggable search module (13 providers)
 │   │   ├── news/             # News pipeline (ranking, windows, KnowS adapter)
 │   │   └── globe/            # Three.js globe renderer
 │   ├── firebase.ts           # Firebase web init (public client config)
@@ -90,6 +123,14 @@ Default local login for testing: `admin` / `pancreas123` (configurable in `.env`
 | `GEMINI_API_KEY` | Server-side Gemini calls | Optional (falls back to simulator) |
 | `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` | Server-side OpenAI-compatible LLM (e.g. StepFun) for translate/review/assistant/chatbot | Optional |
 | `KNOWS_API_KEY` / `KNOWS_BASE_URL` | KnowS evidence search (anonymous tier works without a key) | Optional |
+| `ANYSEARCH_API_KEY` / `ANYSEARCH_ENDPOINT` | AnySearch web/news source for the news aggregator (anonymous tier works without a key) | Optional |
+| `TAVILY_API_KEY` | Tavily news search | Optional |
+| `SERPER_API_KEY` | Google web search via Serper.dev | Optional |
+| `GOOGLE_API_KEY` + `GOOGLE_CSE_ID` | Google CSE (alternative to Serper) | Optional |
+| `METASO_API_KEY` | Metaso/秘塔 Chinese AI search | Optional |
+| `BRAVE_API_KEY` | Brave web search | Optional |
+| `EXA_API_KEY` | Exa neural search | Optional |
+| `NEWS_DISABLE_WEBSEARCH` | Set to `1` to disable the AnySearch web/news source | Optional |
 | `DEFAULT_USERNAME` / `DEFAULT_PASSWORD` | Default local test account | Optional (defaults `admin`/`pancreas123`) |
 | `APP_URL` | Self-referential app URL | Optional |
 | `VITE_FIREBASE_*` | Override Firebase web config | Optional |

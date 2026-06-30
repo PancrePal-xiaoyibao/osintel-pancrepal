@@ -1,28 +1,40 @@
-import { fetchKnowsEvidence } from './knows-adapter.ts';
 import {
   buildNewsRefreshWindow,
   dedupeNewsItems,
   getFreshnessWindowLabel,
+  normalizeKnowsEvidencePayload,
   rankNewsItems,
   type NewsNormalizedItem,
   type NewsWindow,
   type NewsWindowLabel
 } from './pipeline.ts';
+import { searchAggregate } from '../search/index';
+import type { AggregateResult, SearchResult } from '../search/types';
 
 export type NewsRefreshOptions = {
   query: string;
   observedAt?: string;
-  knowsApiKey?: string;
-  knowsBaseUrl?: string;
-  sourceKey?: string;
   freshnessWindows?: NewsWindowLabel[];
+  /** @deprecated Providers now read process.env directly. Kept for compat. */
+  knowsApiKey?: string;
+  /** @deprecated Providers now read process.env directly. Kept for compat. */
+  knowsBaseUrl?: string;
+  /** @deprecated Providers now read process.env directly. Kept for compat. */
+  anySearchApiKey?: string;
+  /** @deprecated Providers now read process.env directly. Kept for compat. */
+  anySearchEndpoint?: string;
+  /** @deprecated Providers now read process.env directly. Kept for compat. */
+  enableAnySearch?: boolean;
+  /** @deprecated Not used by the unified search module. */
+  sourceKey?: string;
 };
 
 export type NewsRefreshResult = {
   items: NewsNormalizedItem[];
   windows: NewsWindow[];
-  mode: 'knows' | 'fallback';
+  mode: 'aggregate' | 'fallback';
   refreshedAt: string;
+  sources: Array<{ source: string; ok: boolean; count: number; reason?: string }>;
 };
 
 function buildFallbackItems(query: string, observedAt: string): NewsNormalizedItem[] {
@@ -134,28 +146,64 @@ function buildFallbackItems(query: string, observedAt: string): NewsNormalizedIt
   });
 }
 
+/** Convert SearchResult[] from the unified search module into NewsNormalizedItem[]. */
+function mapSearchResultsToNews(
+  results: SearchResult[],
+  observedAt: string,
+  query: string
+): NewsNormalizedItem[] {
+  // Build EvidenceLike objects from SearchResult and use the existing normalizer
+  const evidences = results.map((r) => ({
+    title: r.title,
+    url: r.url,
+    source: r.source,
+    publishedAt: r.publishedAt,
+    evidenceLevel: (r.kind === 'guideline' ? 'A' : r.kind === 'trial' || r.kind === 'academic' ? 'B' : 'C') as 'A' | 'B' | 'C' | 'D',
+    topicTags: [r.kind, r.providerId],
+    contentTags: [r.kind === 'news' ? 'news' : r.kind === 'trial' ? 'registry' : 'literature'],
+    summary: r.snippet,
+    patientSummary: r.snippet,
+    sourceEvidence: [{ title: r.title, url: r.url }]
+  }));
+
+  return normalizeKnowsEvidencePayload(
+    { query, results: evidences as any },
+    { sourceKey: 'aggregate', windowLabel: '7d', observedAt }
+  );
+}
+
 export async function refreshNewsWindows(options: NewsRefreshOptions): Promise<NewsRefreshResult> {
   const observedAt = options.observedAt || new Date().toISOString();
   const freshnessWindows = options.freshnessWindows || ['24h', '7d', '30d'];
   const query = options.query.trim() || 'pancreatic cancer';
 
-  const knowsResult = await fetchKnowsEvidence({
-    query,
-    apiKey: options.knowsApiKey,
-    baseUrl: options.knowsBaseUrl || 'https://api.nullht.com',
-    windowLabel: '24h',
-    observedAt
+  // Use the unified search module to fan out to all registered providers
+  const aggregateResult: AggregateResult = await searchAggregate(query, {
+    freshness: 'week',
+    env: process.env as Record<string, string | undefined>
   });
 
-  const items = knowsResult.ok && knowsResult.items.length > 0 ? knowsResult.items : buildFallbackItems(query, observedAt);
+  // Map ProviderStatus[] to the sources format expected by NewsRefreshResult
+  const sources = aggregateResult.providers.map((p) => ({
+    source: p.id,
+    ok: p.ok,
+    count: p.count,
+    reason: p.reason
+  }));
+
+  // Map SearchResult[] to NewsNormalizedItem[]
+  const normalized = mapSearchResultsToNews(aggregateResult.results, observedAt, query);
+
+  const anySourceOk = sources.some((s) => s.ok && s.count > 0);
+  const items = anySourceOk && normalized.length > 0 ? normalized : buildFallbackItems(query, observedAt);
   const ranked = rankNewsItems(dedupeNewsItems(items));
   const windows = buildNewsRefreshWindow({ items: ranked, freshnessWindows }).windows;
 
   return {
     items: ranked,
     windows,
-    mode: knowsResult.ok ? 'knows' : 'fallback',
-    refreshedAt: observedAt
+    mode: aggregateResult.mode === 'fallback' ? 'fallback' : 'aggregate',
+    refreshedAt: observedAt,
+    sources
   };
 }
-
