@@ -6,7 +6,7 @@ import { auth } from './firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { loadPatientProfileFromCloud, savePatientProfileToCloud, deletePatientProfileFromCloud } from './lib/firestore-sync';
 import { getLlmProvider, LLM_PROVIDER_IDS } from './lib/llm-providers';
-import { MOCK_15DAY_REPORT } from './seed-data';
+import { MOCK_15DAY_REPORT, INITIAL_OSINT_FEED, INITIAL_RESOURCE_CENTERS } from './seed-data';
 import { 
   Activity, 
   Terminal, 
@@ -362,15 +362,21 @@ export default function App() {
         const dogObj = await dogRes.json();
         const healthObj = await healthRes.json();
 
-        setItems(feedObj.data || []);
+        setItems(feedObj.data?.length ? feedObj.data : INITIAL_OSINT_FEED);
         setNewsRefreshMode(feedObj.mode || 'fallback');
         setNewsWindowLabel((feedObj.selectedWindow || feedObj.windows?.[0]?.label || '30d') as '24h' | '7d' | '30d');
-        setCenters(coordObj.data || []);
+        setCenters(coordObj.data?.length ? coordObj.data : INITIAL_RESOURCE_CENTERS);
         setWatchdog(dogObj.data || null);
         setRuntimeHealth(healthObj.data || null);
       } catch (err) {
         console.error('Failed to sync state from full-stack server endpoints, utilizing offline fallback:', err);
-        setConsoleMsg('API Server unreachable. System in isolated standalone local mode.');
+        // Frontend-only / static deploy fallback: render the bundled seed data
+        // so news, hospitals and treatments still appear without the API server.
+        setItems(INITIAL_OSINT_FEED);
+        setNewsRefreshMode('fallback');
+        setNewsWindowLabel('30d');
+        setCenters(INITIAL_RESOURCE_CENTERS);
+        setConsoleMsg('API Server unreachable. Loaded bundled offline dataset (news + centers).');
       } finally {
         setIsLoading(false);
       }
