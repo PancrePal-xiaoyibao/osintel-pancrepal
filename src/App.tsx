@@ -59,7 +59,8 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'feed' | 'map' | 'watchdog' | 'report' | 'guidelines' | 'target_insight' | 'patient_profile' | 'ai_elements' | 'hotspot_drugs' | 'help' | 'my'>('feed');
   const [expandedOpsSection, setExpandedOpsSection] = useState<'watchdog' | 'report' | null>(null);
   const [items, setItems] = useState<OSINTItem[]>([]);
-  const [newsRefreshMode, setNewsRefreshMode] = useState<'knows' | 'fallback'>('fallback');
+  const [newsRefreshMode, setNewsRefreshMode] = useState<'aggregate' | 'knows' | 'fallback'>('fallback');
+  const [newsSources, setNewsSources] = useState<Array<{ source: string; ok: boolean; count: number }>>([]);
   const [newsWindowLabel, setNewsWindowLabel] = useState<'24h' | '7d' | '30d'>('30d');
   const [centers, setCenters] = useState<ResourceCenter[]>([]);
   const [watchdog, setWatchdog] = useState<WatchdogStatus | null>(null);
@@ -291,8 +292,10 @@ export default function App() {
       if (resObj.status === 'ok') {
         setItems(resObj.data || []);
         setNewsRefreshMode(resObj.mode || 'fallback');
+        setNewsSources(resObj.sources || []);
         setNewsWindowLabel((resObj.windows?.[0]?.label || '30d') as '24h' | '7d' | '30d');
-        setConsoleMsg(`News refresh completed in ${resObj.mode || 'fallback'} mode.`);
+        const okSources = (resObj.sources || []).filter((s: { ok: boolean; count: number }) => s.ok && s.count > 0).length;
+        setConsoleMsg(`News refresh completed in ${resObj.mode || 'fallback'} mode (${okSources} live sources).`);
         return;
       }
       setConsoleMsg('News refresh returned an error status.');
@@ -364,6 +367,7 @@ export default function App() {
 
         setItems(feedObj.data?.length ? feedObj.data : INITIAL_OSINT_FEED);
         setNewsRefreshMode(feedObj.mode || 'fallback');
+        setNewsSources(feedObj.sources || []);
         setNewsWindowLabel((feedObj.selectedWindow || feedObj.windows?.[0]?.label || '30d') as '24h' | '7d' | '30d');
         setCenters(coordObj.data?.length ? coordObj.data : INITIAL_RESOURCE_CENTERS);
         setWatchdog(dogObj.data || null);
@@ -383,6 +387,27 @@ export default function App() {
     }
     loadInitialData();
   }, []);
+
+  // Auto-refresh the news feed every 5 minutes (pre-designed cadence). The
+  // server caches multi-source aggregation for 5 minutes, so this poll keeps
+  // the homepage live without hammering the upstream search APIs.
+  useEffect(() => {
+    const timer = setInterval(() => {
+      fetch(`/api/osint/feed?window=${newsWindowLabel}`)
+        .then((res) => res.json())
+        .then((obj) => {
+          if (obj.status === 'ok') {
+            setItems(obj.data || []);
+            setNewsRefreshMode(obj.mode || 'fallback');
+            setNewsSources(obj.sources || []);
+          }
+        })
+        .catch(() => {
+          // Silent in offline/static mode.
+        });
+    }, 5 * 60 * 1000);
+    return () => clearInterval(timer);
+  }, [newsWindowLabel]);
 
   // Set up periodic polling for Watchdog telemetry metrics (e.g., CPU, API counts) to keep dashboard responsive
   useEffect(() => {
@@ -1002,6 +1027,7 @@ export default function App() {
                 statusMessage={consoleMsg}
                 newsRefreshMode={newsRefreshMode}
                 newsWindowLabel={newsWindowLabel}
+                newsSources={newsSources}
                 onOpenSubmission={() => setIsSubmissionOpen(true)}
                 searchTerm={feedSearchTerm}
                 onSearchTermChange={setFeedSearchTerm}

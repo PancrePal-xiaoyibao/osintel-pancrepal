@@ -27,8 +27,9 @@ interface OSINTFeedProps {
   onGenerateSummary: () => Promise<string>;
   isFetching: boolean;
   statusMessage?: string;
-  newsRefreshMode?: 'knows' | 'fallback';
+  newsRefreshMode?: 'aggregate' | 'knows' | 'fallback';
   newsWindowLabel?: '24h' | '7d' | '30d';
+  newsSources?: Array<{ source: string; ok: boolean; count: number }>;
   onOpenSubmission?: () => void;
   searchTerm?: string;
   onSearchTermChange?: (val: string) => void;
@@ -749,6 +750,7 @@ export default function OSINTFeedView({
   statusMessage,
   newsRefreshMode,
   newsWindowLabel,
+  newsSources,
   onOpenSubmission,
   searchTerm,
   onSearchTermChange,
@@ -910,11 +912,26 @@ export default function OSINTFeedView({
             </div>
             <div className="flex items-center justify-between text-xs text-zinc-300">
               <span className="font-medium">Source mode</span>
-              <span className={newsRefreshMode === 'knows' ? 'text-emerald-400' : 'text-amber-400'}>{newsRefreshMode === 'knows' ? 'KNOWS' : 'Fallback'}</span>
+              <span className={newsRefreshMode === 'fallback' ? 'text-amber-400' : 'text-emerald-400'}>
+                {newsRefreshMode === 'aggregate' ? 'Aggregate' : newsRefreshMode === 'knows' ? 'KNOWS' : 'Fallback'}
+              </span>
             </div>
+            {newsSources && newsSources.length > 0 && (
+              <div className="flex flex-wrap gap-1 pt-0.5">
+                {newsSources.map((s) => (
+                  <span
+                    key={s.source}
+                    title={s.ok ? `${s.source}: ${s.count} results` : `${s.source}: unavailable`}
+                    className={`text-[9px] px-1.5 py-0.5 rounded border font-mono ${s.ok && s.count > 0 ? 'border-emerald-500/30 text-emerald-300 bg-emerald-500/5' : 'border-white/10 text-zinc-600'}`}
+                  >
+                    {s.source}{s.ok && s.count > 0 ? ` ${s.count}` : ' ·'}
+                  </span>
+                ))}
+              </div>
+            )}
             <div className="flex items-center gap-2 text-[10px] text-zinc-500">
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-              5-minute refresh ready
+              5-minute auto-refresh active
             </div>
           </div>
         

@@ -1,3 +1,6 @@
+// Register all search providers (side-effect import)
+import './src/lib/search/providers/index.ts';
+
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
@@ -34,7 +37,8 @@ let cachedNewsRefresh: {
   expiresAt: number;
   items: OSINTItem[];
   windows: { label: NewsWindowLabel; items: OSINTItem[] }[];
-  mode: 'knows' | 'fallback';
+  mode: 'aggregate' | 'fallback';
+  sources: { source: string; ok: boolean; count: number; reason?: string }[];
 } | null = null;
 const resourceCenters = [...INITIAL_RESOURCE_CENTERS].map(center => {
   if (!center.explicitCategory) {
@@ -82,9 +86,6 @@ async function refreshNewsFeed(query = 'pancreatic cancer') {
   const refreshed = await refreshNewsWindows({
     query,
     observedAt: new Date().toISOString(),
-    knowsApiKey: process.env.KNOWS_API_KEY,
-    knowsBaseUrl: process.env.KNOWS_BASE_URL,
-    sourceKey: 'knows',
     freshnessWindows: ['24h', '7d', '30d']
   });
 
@@ -95,7 +96,8 @@ async function refreshNewsFeed(query = 'pancreatic cancer') {
     expiresAt: Date.now() + 5 * 60 * 1000,
     items: mapped,
     windows: refreshed.windows.map((window) => ({ label: window.label, items: mapNewsItems(window.items) })),
-    mode: refreshed.mode
+    mode: refreshed.mode,
+    sources: refreshed.sources
   };
 
   return cachedNewsRefresh;
@@ -210,6 +212,7 @@ app.get('/api/osint/feed', async (req, res) => {
     selectedWindow: window,
     refreshedAt: snapshot.refreshedAt,
     mode: snapshot.mode,
+    sources: snapshot.sources,
     data: source?.items || osintFeed,
     windows: snapshot.windows
   });
