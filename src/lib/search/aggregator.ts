@@ -37,20 +37,35 @@ export async function searchAggregate(
 
   // Check cache first
   const cached = getCached(query, options.kinds);
-  if (cached) return cached;
+  if (cached) {
+    console.log(`[search] query="${query}" → cache HIT (${cached.results.length} results, served from memory)`);
+    return cached;
+  }
 
   const enabled = getEnabledProviders(env, options.kinds).filter(
     (p) => !isCircuitOpen(p.id)
   );
 
-  console.log(`[search] query="${query}" | ${enabled.length} providers enabled: ${enabled.map(p => p.id).join(', ')}`);
+  const t0 = Date.now();
+  console.log(`\n┌─ [search] query="${query}"`);
+  console.log(`│  providers (${enabled.length}): ${enabled.map((p) => `${p.id}(${p.kind})`).join(', ')}`);
 
   const timeout = options.timeoutMs ?? 20000;
   const settled = await Promise.allSettled(
     enabled.map(async (provider) => {
       const start = Date.now();
-      const results = await provider.search(query, { ...options, timeoutMs: timeout });
-      return { provider, results, durationMs: Date.now() - start };
+      try {
+        const results = await provider.search(query, { ...options, timeoutMs: timeout });
+        const ms = Date.now() - start;
+        // Live per-provider progress line as each finishes.
+        const sample = results[0]?.title ? ` | top: "${results[0].title.slice(0, 60)}"` : '';
+        console.log(`│  ✓ ${provider.id.padEnd(16)} ${String(results.length).padStart(3)} results  ${String(ms).padStart(5)}ms${sample}`);
+        return { provider, results, durationMs: ms };
+      } catch (err) {
+        const ms = Date.now() - start;
+        console.log(`│  ✗ ${provider.id.padEnd(16)} FAILED        ${String(ms).padStart(5)}ms | ${err instanceof Error ? err.message : 'error'}`);
+        throw err;
+      }
     })
   );
 
@@ -92,6 +107,16 @@ export async function searchAggregate(
     return true;
   });
 
+  const dupCount = allResults.length - deduped.length;
+  console.log(`│  extract: ${allResults.length} raw → ${deduped.length} unique (${dupCount} duplicates removed)`);
+
+  // Breakdown by kind for presentation visibility
+  const byKind = deduped.reduce<Record<string, number>>((acc, r) => {
+    acc[r.kind] = (acc[r.kind] || 0) + 1;
+    return acc;
+  }, {});
+  const kindSummary = Object.entries(byKind).map(([k, n]) => `${k}:${n}`).join(' ');
+
   const result: AggregateResult = {
     results: deduped,
     providers: statuses,
@@ -104,14 +129,19 @@ export async function searchAggregate(
     if (persisted && persisted.results.length > 0) {
       persisted.mode = 'aggregate';
       persisted.cachedAt = 'disk';
-      // Still set in-memory cache so we don't re-read disk on next poll
       setCache(query, options.kinds, persisted);
+      console.log(`│  ⚠ no live results — loaded ${persisted.results.length} from disk cache`);
+      console.log(`└─ done in ${Date.now() - t0}ms (mode=disk-fallback)\n`);
       return persisted;
     }
   }
 
   // Set cache and persist to disk for future reuse
   setCache(query, options.kinds, result);
+
+  const okCount = statuses.filter((s) => s.ok && s.count > 0).length;
+  console.log(`│  present: ${deduped.length} items [${kindSummary}] from ${okCount}/${enabled.length} live sources`);
+  console.log(`└─ done in ${Date.now() - t0}ms (mode=${result.mode})\n`);
 
   return result;
 }

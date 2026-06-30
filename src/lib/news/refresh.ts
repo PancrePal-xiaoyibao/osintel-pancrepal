@@ -201,6 +201,9 @@ export async function refreshNewsWindows(options: NewsRefreshOptions): Promise<N
   const ranked = rankNewsItems(dedupeNewsItems(items));
   const windows = buildNewsRefreshWindow({ items: ranked, freshnessWindows }).windows;
 
+  const winSummary = windows.map((w) => `${w.label}:${w.items.length}`).join(' ');
+  console.log(`[feed] normalized ${normalized.length} → ranked ${ranked.length} items | windows ${winSummary} | mode=${aggregateResult.mode === 'fallback' ? 'fallback' : 'aggregate'}`);
+
   return {
     items: ranked,
     windows,
