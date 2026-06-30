@@ -1,6 +1,6 @@
 import type { AggregateResult, ProviderStatus, SearchOptions, SearchResult } from './types';
 import { getEnabledProviders } from './registry';
-import { getCached, setCache } from './cache';
+import { getCached, setCache, loadFromFile } from './cache';
 
 type CircuitState = { failures: number; cooldownUntil: number };
 const circuits = new Map<string, CircuitState>();
@@ -42,6 +42,8 @@ export async function searchAggregate(
   const enabled = getEnabledProviders(env, options.kinds).filter(
     (p) => !isCircuitOpen(p.id)
   );
+
+  console.log(`[search] query="${query}" | ${enabled.length} providers enabled: ${enabled.map(p => p.id).join(', ')}`);
 
   const timeout = options.timeoutMs ?? 20000;
   const settled = await Promise.allSettled(
@@ -96,7 +98,19 @@ export async function searchAggregate(
     mode: deduped.length > 0 ? 'aggregate' : 'fallback',
   };
 
-  // Set cache after successful aggregation
+  // If no live results, try loading the last persisted file for this query
+  if (result.mode === 'fallback') {
+    const persisted = loadFromFile(query, options.kinds);
+    if (persisted && persisted.results.length > 0) {
+      persisted.mode = 'aggregate';
+      persisted.cachedAt = 'disk';
+      // Still set in-memory cache so we don't re-read disk on next poll
+      setCache(query, options.kinds, persisted);
+      return persisted;
+    }
+  }
+
+  // Set cache and persist to disk for future reuse
   setCache(query, options.kinds, result);
 
   return result;
