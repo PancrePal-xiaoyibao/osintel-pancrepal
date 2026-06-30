@@ -19,6 +19,68 @@ function toFilename(key: string): string {
   return key.replace(/[^a-z0-9_-]/gi, '_').slice(0, 120) + '.json';
 }
 
+/** Path of the marker file recording the most recent search query. */
+const LAST_QUERY_FILE = path.join(PERSIST_DIR, '_last-query.json');
+
+/** Record the most recent search so it can be restored as the default on next startup. */
+function recordLastQuery(query: string, key: string): void {
+  try {
+    fs.writeFileSync(
+      LAST_QUERY_FILE,
+      JSON.stringify({ query, key, timestamp: new Date().toISOString() }, null, 2),
+      'utf-8'
+    );
+  } catch {
+    /* non-critical */
+  }
+}
+
+/** Return the most recent search query recorded on disk, if any. */
+export function getLastQuery(): { query: string; key: string; timestamp: string } | null {
+  try {
+    if (!fs.existsSync(LAST_QUERY_FILE)) return null;
+    return JSON.parse(fs.readFileSync(LAST_QUERY_FILE, 'utf-8'));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Load the most recent persisted search result: prefer the last-query marker,
+ * then fall back to the most-recently-modified query file on disk.
+ * Used on startup to seed the stream feed with the previous session's results.
+ */
+export function loadMostRecent(): { query: string; result: AggregateResult } | null {
+  try {
+    // 1. Try the explicit last-query marker.
+    const last = getLastQuery();
+    if (last) {
+      const filePath = path.join(PERSIST_DIR, toFilename(last.key));
+      if (fs.existsSync(filePath)) {
+        const parsed = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+        if (parsed.result?.results?.length) {
+          return { query: last.query, result: parsed.result };
+        }
+      }
+    }
+    // 2. Fall back to the newest query file in the cache directory.
+    if (!fs.existsSync(PERSIST_DIR)) return null;
+    const candidates = fs.readdirSync(PERSIST_DIR)
+      .filter((f) => f.endsWith('.json') && !f.startsWith('_'))
+      .map((f) => ({ f, mtime: fs.statSync(path.join(PERSIST_DIR, f)).mtimeMs }))
+      .sort((a, b) => b.mtime - a.mtime);
+    for (const c of candidates) {
+      const parsed = JSON.parse(fs.readFileSync(path.join(PERSIST_DIR, c.f), 'utf-8'));
+      if (parsed.result?.results?.length) {
+        return { query: parsed.query || 'pancreatic cancer', result: parsed.result };
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export function getCached(query: string, kinds?: string[]): AggregateResult | null {
   const entry = cache.get(cacheKey(query, kinds));
   if (!entry || Date.now() > entry.expiresAt) return null;
@@ -75,6 +137,9 @@ function persistToFile(key: string, query: string, result: AggregateResult): voi
     fs.writeFileSync(latestPath, JSON.stringify(payload, null, 2), 'utf-8');
 
     console.log(`[persist] saved ${result.results.length} results → data/search-cache/${toFilename(key)}`);
+
+    // Record this as the most recent search → restored as default stream on next startup.
+    recordLastQuery(query, key);
 
     // Also append to a time-series log (one line per search, NDJSON)
     const logPath = path.join(PERSIST_DIR, '_search-log.ndjson');

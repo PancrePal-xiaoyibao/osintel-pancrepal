@@ -82,6 +82,19 @@ function mapNewsItems(items: Array<Awaited<ReturnType<typeof refreshNewsWindows>
   }));
 }
 
+/**
+ * Domain-anchor every search with the pancreatic-cancer keyword, then append the
+ * user's keywords. Avoids double-anchoring when the input already references
+ * pancreatic disease (EN or 中文). Empty input → the base keyword only.
+ */
+function buildPancreaticQuery(input?: string): string {
+  const raw = (input || '').trim();
+  if (!raw) return 'pancreatic cancer';
+  const lower = raw.toLowerCase();
+  if (lower.includes('pancrea') || raw.includes('胰腺') || raw.includes('胰癌')) return raw;
+  return `pancreatic cancer ${raw}`;
+}
+
 async function refreshNewsFeed(query = 'pancreatic cancer', onLog?: (line: string) => void) {
   const refreshed = await refreshNewsWindows({
     query,
@@ -220,7 +233,7 @@ app.get('/api/osint/feed', async (req, res) => {
 });
 
 app.post('/api/osint/feed/refresh', async (req, res) => {
-  const query = typeof req.body?.query === 'string' ? req.body.query : 'pancreatic cancer';
+  const query = buildPancreaticQuery(typeof req.body?.query === 'string' ? req.body.query : '');
   const snapshot = await refreshNewsFeed(query);
   res.json({
     status: 'ok',
@@ -236,9 +249,7 @@ app.post('/api/osint/feed/refresh', async (req, res) => {
 // SSE streaming refresh: emits live log lines as the search runs, then a final
 // 'done' event with the feed data. Powers the live terminal console on the homepage.
 app.get('/api/osint/feed/refresh-stream', async (req, res) => {
-  const query = typeof req.query.query === 'string' && req.query.query.trim()
-    ? req.query.query.trim()
-    : 'pancreatic cancer';
+  const query = buildPancreaticQuery(typeof req.query.query === 'string' ? req.query.query : '');
 
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -278,9 +289,25 @@ app.get('/api/osint/feed/refresh-stream', async (req, res) => {
 app.get('/api/osint/feed/cached', (req, res) => {
   try {
     const cacheDir = path.resolve(process.cwd(), 'data', 'search-cache');
-    // Default query file
-    const queryParam = typeof req.query.q === 'string' ? req.query.q : 'pancreatic cancer';
-    const safeKey = (queryParam.toLowerCase().trim() + '|').replace(/[^a-z0-9_-]/gi, '_').slice(0, 120) + '.json';
+
+    // Determine which file to serve:
+    // - explicit ?q= param wins
+    // - otherwise restore the LAST searched query (recorded in _last-query.json)
+    // - otherwise fall back to the base "pancreatic cancer" file
+    let safeKey: string;
+    if (typeof req.query.q === 'string' && req.query.q.trim()) {
+      safeKey = (req.query.q.toLowerCase().trim() + '|').replace(/[^a-z0-9_-]/gi, '_').slice(0, 120) + '.json';
+    } else {
+      let lastKey: string | null = null;
+      try {
+        const markerPath = path.join(cacheDir, '_last-query.json');
+        if (fs.existsSync(markerPath)) {
+          const marker = JSON.parse(fs.readFileSync(markerPath, 'utf-8'));
+          if (marker?.key) lastKey = marker.key.replace(/[^a-z0-9_-]/gi, '_').slice(0, 120) + '.json';
+        }
+      } catch { /* ignore */ }
+      safeKey = lastKey || ('pancreatic cancer|').replace(/[^a-z0-9_-]/gi, '_').slice(0, 120) + '.json';
+    }
     const filePath = path.join(cacheDir, safeKey);
 
     if (!fs.existsSync(filePath)) {
@@ -1680,12 +1707,24 @@ async function startServer() {
     console.log(`=======================================================`);
 
     // Background 5-minute auto-refresh: search → persist to file → next poll reads fresh file.
-    // This keeps the feed live without waiting for a user to trigger refresh.
+    // Refreshes the user's LAST searched query (falling back to the base keyword), so the
+    // persisted "startup stream" stays both fresh and aligned with what the user last viewed.
     const REFRESH_INTERVAL_MS = 5 * 60 * 1000;
-    const autoRefresh = async () => {
+    const readLastQuery = (): string => {
       try {
-        console.log('[auto-refresh] Starting scheduled news aggregation...');
-        await refreshNewsFeed('pancreatic cancer');
+        const markerPath = path.resolve(process.cwd(), 'data', 'search-cache', '_last-query.json');
+        if (fs.existsSync(markerPath)) {
+          const marker = JSON.parse(fs.readFileSync(markerPath, 'utf-8'));
+          if (typeof marker?.query === 'string' && marker.query.trim()) return marker.query.trim();
+        }
+      } catch { /* ignore */ }
+      return 'pancreatic cancer';
+    };
+    const autoRefresh = async () => {
+      const q = readLastQuery();
+      try {
+        console.log(`[auto-refresh] Starting scheduled aggregation for "${q}"...`);
+        await refreshNewsFeed(q);
         console.log('[auto-refresh] Done. Next in 5 minutes.');
       } catch (err) {
         console.error('[auto-refresh] Failed:', err);

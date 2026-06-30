@@ -18,4 +18,4 @@ export { searchAggregate } from './aggregator';
 export { registerProvider, getEnabledProviders, getAllProviders } from './registry';
 
 // Cache
-export { getCached, setCache, loadFromFile } from './cache';
+export { getCached, setCache, loadFromFile, loadMostRecent, getLastQuery } from './cache';
