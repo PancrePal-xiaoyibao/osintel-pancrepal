@@ -385,13 +385,13 @@ export default function OSINTChatView({
 
       const resObj = await response.json();
 
-      // Setup simulated citations if none retrieved
       let resolvedCitations = undefined;
-      if (textToSend.includes('MRTX1133') || textToSend.includes('G12D') || textToSend.includes('inhibitor')) {
+      const canAttachCitations = resObj.status === 'ok' && resObj.mode !== 'unavailable';
+      if (canAttachCitations && (textToSend.includes('MRTX1133') || textToSend.includes('G12D') || textToSend.includes('inhibitor'))) {
         resolvedCitations = [
           { id: 1, title: 'MRTX1133 in KRAS G12D Advanced Solid Tumors (Phase I trial)', url: 'https://clinicaltrials.gov/study/NCT05737706', excerpt: 'Non-covalent binding prevents activation in cellular lines and demonstrates extreme specificity over G12C and G12S variants.' }
         ];
-      } else if (textToSend.includes('PERT') || textToSend.includes('胰酶') || textToSend.includes('enzyme')) {
+      } else if (canAttachCitations && (textToSend.includes('PERT') || textToSend.includes('胰酶') || textToSend.includes('enzyme'))) {
         resolvedCitations = [
           { id: 1, title: 'NCCN Supportive Care Taskforce: EPI Management & Pancrelipase Dosage Rules', url: 'https://www.nccn.org', excerpt: 'Administer capsules with first bite, avoid crushing, adjust matching meals between 50,000 to 75,000 units to secure ideal calorie and weight maintenance.' }
         ];
@@ -402,47 +402,23 @@ export default function OSINTChatView({
         sender: 'ai',
         text: resObj.text,
         time: new Date(),
-        reasoning: resObj.reasoning || `[Thinking Trace - Multilingual ${language}]\n- Initializing routing parameters for model: ${selectedModel}\n- Context synced with patient characteristics.\n- Localized scientific translation requested.\n- Complete evidence checking accomplished.`,
-        reasoningTimeMs: resObj.reasoningTimeMs || 920,
+        reasoning: resObj.reasoning || `[LLM status]\n- Backend mode: ${resObj.mode || 'unknown'}\n- Provider: ${activeProvider}\n- Model: ${selectedModel}`,
+        reasoningTimeMs: resObj.reasoningTimeMs || 0,
         isReasoningCollapsed: false,
         citations: resolvedCitations
       }]);
 
     } catch (err: any) {
-      console.error('Chat routing error, using fallback simulated response', err);
-      
-      // Clinical simulations when offline or no API credentials
-      setTimeout(() => {
-        let simulatedText = `### 🌐 **[Simulated Evidence Response - ${language}]**\n`;
-        let simulatedReasoning = `【Autonomous Safeguard Diagnostics - Fallback Engine】\n- Connection trace to provider ${activeProvider} returned error. ${err.message}.\n- Automatically pulled medical lexicon mapped to query: "${textToSend}" in target language.\n- Citations compiled successfully.`;
-
-        if (textToSend.toLowerCase().includes('mrtx') || textToSend.toLowerCase().includes('g12d')) {
-          simulatedText += `针对您的询问（**KRAS G12D / MRTX1133**），大模型临床数据库给出以下方案：
-1. **MRTX1133机制**：首个高选择性、非共价 KRAS G12D 靶向抑制剂。相比常规共价药具有更高的亲和活性，不易产生快速耐药突变。
-2. **临床缓解数据**：一期研究中，经治晚期胰腺癌患者客观缓解率（ORR）达到约 30% 以上，中位无进展生存（PFS）时间录得明显延长。`;
-        } else if (textToSend.toLowerCase().includes('pert') || textToSend.toLowerCase().includes('胰') || textToSend.toLowerCase().includes('enzyme')) {
-          simulatedText += `关于随餐胰酶（**PERT**）的使用，最新临床指南建议：
-1. **服药时机**：必须随主餐或零食第一口饭直接吞服，绝不能空腹、饭后服或嚼碎。
-2. **常规剂量**：主餐推荐 50,000 至 75,000 单位胰酶活性，加餐零食推荐 25,000 至 35,000 单位，根据大便油脂拉稀及体重变化动态调整。`;
-        } else {
-          simulatedText += `对于您咨询的有关内容：**"${textToSend || '附件诊断'}"**，结合您最新的病情档案特征，系统建议：
-1. 立即检测外周血循环肿瘤 DNA (ctDNA) 突变负荷以判断化疗减弱时机。
-2. 重视术后或病灶带来的消化吸收障碍。随餐补充胰酶（PERT）可有效维持肌肉质量，阻挡恶病质的恶化。`;
-        }
-
-        setMessages(prev => [...prev, {
-          id: `ai-sim-${Date.now()}`,
-          sender: 'ai',
-          text: simulatedText,
-          time: new Date(),
-          reasoning: simulatedReasoning,
-          reasoningTimeMs: 1420,
-          isReasoningCollapsed: false,
-          citations: [
-            { id: 1, title: 'ESMO Guideline on Supportive Care in Pancreatic Ductal Carcinoma', url: 'https://esmo.org', excerpt: 'PERT protocols with meals improve overall survivability indexes by reducing malnutrition and cachexia secondary to duodenal blocking.' }
-          ]
-        }]);
-      }, 1000);
+      console.error('Chat routing error:', err);
+      setMessages(prev => [...prev, {
+        id: `ai-unavailable-${Date.now()}`,
+        sender: 'ai',
+        text: `### AI 助手暂不可用\n\n连接到 ${activeProvider} 失败：${err.message}。\n\n系统没有生成模拟医学回答。请配置有效 API key，或先使用文献、临床试验和 KnowS 检索结果。`,
+        time: new Date(),
+        reasoning: `[LLM unavailable]\nProvider: ${activeProvider}\nModel: ${selectedModel}\nError: ${err.message}`,
+        reasoningTimeMs: 0,
+        isReasoningCollapsed: false
+      }]);
     } finally {
       setIsTyping(false);
     }

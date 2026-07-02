@@ -120,7 +120,7 @@ The news, hospitals, and treatment data are served by the Express API in
 
 | Variable | Purpose | Required |
 | --- | --- | --- |
-| `GEMINI_API_KEY` | Server-side Gemini calls | Optional (falls back to simulator) |
+| `GEMINI_API_KEY` | Server-side Gemini calls | Optional (AI endpoints report unavailable or use extractive fallback when absent) |
 | `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` | Server-side OpenAI-compatible LLM (e.g. StepFun) for translate/review/assistant/chatbot | Optional |
 | `KNOWS_API_KEY` / `KNOWS_BASE_URL` | KnowS evidence search (anonymous tier works without a key) | Optional |
 | `ANYSEARCH_API_KEY` / `ANYSEARCH_ENDPOINT` | AnySearch web/news source for the news aggregator (anonymous tier works without a key) | Optional |
@@ -138,6 +138,18 @@ The news, hospitals, and treatment data are served by the Express API in
 Secrets live only in `.env` (gitignored). `firebase-applet-config.json` holds a
 Firebase **web** client config, which is public by design and safe to commit;
 replace it with your own project via the file or `VITE_FIREBASE_*` env vars.
+
+## Runtime Modes
+
+Production-facing APIs now report explicit modes:
+
+- `real` — backed by a live upstream search source, data source, or configured model.
+- `graceful_fallback` — deterministic extraction from existing real/seed items; no new medical claims are generated.
+- `demo_only` — legacy demonstration surfaces such as the watchdog console.
+- `unavailable` — no real upstream or safe fallback is configured.
+
+AI chat endpoints no longer fabricate medical answers when no provider key is
+available. Configure `LLM_API_KEY` or `GEMINI_API_KEY` for model output.
 
 ## Scripts
 

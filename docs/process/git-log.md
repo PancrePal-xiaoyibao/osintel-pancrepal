@@ -10,3 +10,4 @@
 - 2026-06-26: Visual refinement pass reduced the purple/teal demo styling, normalized the AI Elements and chat overlays, and preserved export/config flows.
 - 2026-06-28: Branch `personalized-osintel` opened; added the personalized OSINTel design spec, research adapters (Europe PMC + ClinicalTrials.gov), zero-hallucination verifier, `/api/personal/*` routes, and the "My" tab (MyPersonalView).
 - 2026-06-28: Added the shared KnowS evidence client + `/api/knows/*` routes, the global floating AI chatbot, server-side OpenAI-compatible LLM config with translation, and local username/password auth (`/api/auth/*`) with `.env` default credentials.
+- 2026-07-02: Hardened issue #10 mock-audit runtime modes.

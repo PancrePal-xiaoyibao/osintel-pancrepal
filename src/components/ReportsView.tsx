@@ -202,8 +202,8 @@ ${report.recommendations.map((rec, i) => `提案 #${i + 1}: ${rec} [沙箱预编
   const shareSummary = activeTab === 'audit' ? report.executiveSummary.slice(0, 80) + '...' : '打造无需常驻网络维护者、24x7自动化追踪并解密突变及靶新药的数据自治生命体规范。';
   const shareLink = window.location.href;
 
-  const mockWeChatText = `【胰腺癌开源情报研判报告已归档】\n📄 报告：${shareTitle}\n🎯 综合研判评分：${activeTab === 'audit' ? report.dataQualityScore : 100}/100\n💡 概要：${shareSummary}\n🔗 安全接入链接配合离线画像载入：${shareLink}`;
-  const mockFeishuText = `{\n  "title": "📊 胰腺癌开源情报中心 - 文档归档分享",\n  "content": "${shareTitle}",\n  "score": "${activeTab === 'audit' ? report.dataQualityScore : 100}",\n  "summary": "${shareSummary}",\n  "url": "${shareLink}"\n}`;
+  const sharePreviewWeChatText = `【胰腺癌开源情报研判报告已归档】\n📄 报告：${shareTitle}\n🎯 综合研判评分：${activeTab === 'audit' ? report.dataQualityScore : 100}/100\n💡 概要：${shareSummary}\n🔗 安全接入链接配合离线画像载入：${shareLink}`;
+  const sharePreviewFeishuText = `{\n  "title": "📊 胰腺癌开源情报中心 - 文档归档分享",\n  "content": "${shareTitle}",\n  "score": "${activeTab === 'audit' ? report.dataQualityScore : 100}",\n  "summary": "${shareSummary}",\n  "url": "${shareLink}"\n}`;
 
   return (
     <div className="space-y-6 font-sans select-none" id="reports-view-panel">
@@ -596,7 +596,7 @@ ${report.recommendations.map((rec, i) => `提案 #${i + 1}: ${rec} [沙箱预编
                 </div>
 
                 <div className="bg-[#0e1712]/50 border border-emerald-500/5 p-3 rounded-xl text-[10px] text-emerald-300 font-mono whitespace-pre-wrap leading-relaxed select-all">
-                  {mockWeChatText}
+                  {sharePreviewWeChatText}
                 </div>
 
                 <div className="flex items-center gap-2.5 justify-between">
@@ -615,7 +615,7 @@ ${report.recommendations.map((rec, i) => `提案 #${i + 1}: ${rec} [沙箱预编
                   </div>
 
                   <button
-                    onClick={() => handleCopyToClipboard(mockWeChatText, 'wechat')}
+                    onClick={() => handleCopyToClipboard(sharePreviewWeChatText, 'wechat')}
                     className="py-1 px-3 bg-emerald-700 hover:bg-emerald-650 text-white text-[10px] font-bold rounded-lg transition active:scale-95 flex items-center gap-1 shrink-0"
                   >
                     {copiedChannel === 'wechat' ? '✓ 已复制朋友圈文案' : '一键复制口令文案'}
@@ -636,12 +636,12 @@ ${report.recommendations.map((rec, i) => `提案 #${i + 1}: ${rec} [沙箱预编
                 </div>
 
                 <div className="bg-[#111622]/40 border border-blue-500/5 p-2.5 rounded-xl text-[10px] text-zinc-400 font-mono whitespace-pre overflow-x-auto max-h-[80px]">
-                  {mockFeishuText}
+                  {sharePreviewFeishuText}
                 </div>
 
                 <div className="text-right">
                   <button
-                    onClick={() => handleCopyToClipboard(mockFeishuText, 'feishu')}
+                    onClick={() => handleCopyToClipboard(sharePreviewFeishuText, 'feishu')}
                     className="py-1 px-3 bg-blue-800 hover:bg-blue-750 text-white text-[10px] font-bold rounded-lg transition active:scale-95 inline-flex items-center gap-1"
                   >
                     {copiedChannel === 'feishu' ? '✓ 已复制 Markdown 消息卡片' : '复制 Feishu 卡片 JSON'}
@@ -659,7 +659,7 @@ ${report.recommendations.map((rec, i) => `提案 #${i + 1}: ${rec} [沙箱预编
               <div className="flex gap-2">
                 {/* Twitter / X */}
                 <a
-                  href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(mockWeChatText)}`}
+                  href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(sharePreviewWeChatText)}`}
                   target="_blank"
                   referrerPolicy="no-referrer"
                   className="flex-1 py-2 bg-zinc-900 hover:bg-zinc-850 hover:text-white border border-white/5 hover:border-white/10 text-zinc-300 rounded-xl text-xs font-semibold text-center flex items-center justify-center gap-1.5 cursor-pointer transition active:scale-95"
@@ -679,7 +679,7 @@ ${report.recommendations.map((rec, i) => `提案 #${i + 1}: ${rec} [沙箱预编
 
                 {/* Email Direct */}
                 <a
-                  href={`mailto:?subject=${encodeURIComponent(shareTitle)}&body=${encodeURIComponent(mockWeChatText)}`}
+                  href={`mailto:?subject=${encodeURIComponent(shareTitle)}&body=${encodeURIComponent(sharePreviewWeChatText)}`}
                   className="p-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-xl cursor-pointer transition active:scale-95"
                   title="通过电子邮件直接转发给医学专家"
                 >

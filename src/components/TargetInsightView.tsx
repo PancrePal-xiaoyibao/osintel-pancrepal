@@ -756,33 +756,14 @@ export default function TargetInsightView({
         throw new Error('Endpoint failed status');
       }
     } catch (e) {
-      console.warn('Scrap fallback activated', e);
-      // Perfect high fidelity clinical fallback so user ALWAYS gets instant results in exactly 1.3 seconds
-      const simulatedNews: OSINTItem = {
-        id: `scraped-insight-${Date.now()}`,
-        title: `Therapeutic Efficacy of Novel Selective Bio-Conjugates and Combined ${queryKeyword.toUpperCase()} Feedback Blockade`,
-        url: 'https://pubmed.ncbi.nlm.nih.gov/',
-        source: 'ESMO Molecular Congress',
-        publishedAt: new Date().toISOString(),
-        country: 'Global',
-        category: 'drug',
-        entities: [queryKeyword.toUpperCase(), 'EGFR Blockade', 'Combination Regimen'],
-        importanceScore: 9.4,
-        summary: `经系统实时精准爬扫并翻译，最新针对“${queryKeyword.toUpperCase()}”联合反馈补偿旁路（如EGFR或SHP2）的多靶阻滞方案取得卓越成果。受试组家庭跟进证实中位PFS获得显着延长，脱靶白细胞异常降率大幅度改善。`,
-        evidenceLevel: 'A'
-      };
-
-      if (onItemsChange) {
-        onItemsChange(prev => [simulatedNews, ...prev]);
-      }
-
+      console.warn('Target insight real search unavailable', e);
       setCrawlLogs(prev => [
         ...prev,
-        `✔ [本地集成成功] 备份AI数据探针启动，安全对齐要素: "${simulatedNews.title}"`,
-        `✔ [同步完成] 循证评级: A级, 匹配主情报数，状态极佳。`
+        `✖ [真实检索不可用] 未能为 "${queryKeyword}" 获取可验证的新情报。`,
+        'ℹ [未写入主情报] 系统没有插入模拟新闻；请稍后重试或检查上游 API key。'
       ]);
 
-      setToastText(`【秒级本地深度更新成功】拉通最新情报: "${simulatedNews.title.substring(0, 30)}..."`);
+      setToastText('真实检索暂不可用，未写入模拟情报。');
       setShowToast(true);
       setTimeout(() => setShowToast(false), 4500);
       setCountdown(300); // Reset timer
@@ -821,8 +802,8 @@ export default function TargetInsightView({
       return criteriaStr.includes(currentConfig.tagFilter.toLowerCase());
     });
 
-    // 2. Get high-fidelity items from fallback pool
-    // If the user is actively typing a search filter in this view, expand matches to ALL fallback pool categories
+    // 2. Add clearly local example cards for empty-state exploration only.
+    // These examples are not written back to the global OSINT feed.
     let fallbackMatches: OSINTItem[] = [];
     if (subSearch.trim()) {
       Object.values(FALLBACK_POOL).forEach(itemsList => {

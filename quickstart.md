@@ -16,8 +16,8 @@ npm install
 ## 2. Configure environment
 
 Copy the example file and fill in what you have. Every key is optional — the app
-degrades gracefully (simulated AI, anonymous evidence search) when keys are
-missing.
+degrades gracefully with explicit `unavailable` / `graceful_fallback` modes and
+anonymous evidence search when keys are missing.
 
 ```bash
 cp .env.example .env
@@ -102,8 +102,9 @@ npm start    # serves dist/server.cjs
 
 ## Troubleshooting
 
-- **AI replies are simulated / generic** — no LLM key reachable. Set `LLM_API_KEY`
-  (or `GEMINI_API_KEY`) in `.env` and restart `npm run dev`.
+- **AI replies are unavailable** — no LLM key is reachable. Set `LLM_API_KEY`
+  (or `GEMINI_API_KEY`) in `.env` and restart `npm run dev`. The app does not
+  generate simulated medical answers when no real model is configured.
 - **Evidence/news shows fallback data** — external APIs (KnowS / Europe PMC /
   ClinicalTrials.gov) may be unreachable from your network; the app falls back
   to seeded content. A bad `KNOWS_API_KEY` auto-falls back to the anonymous tier.

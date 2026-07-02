@@ -294,14 +294,14 @@ export default function AIElementsPlayground({ onClose }: { onClose?: () => void
       const resData = await response.json();
 
       let citationsList = undefined;
-      // Inject smart citations based on queries on medical topics
       const rawText = resData.text || '';
-      if (rawText.toLowerCase().includes('kras') || text.toLowerCase().includes('kras')) {
+      const canAttachCitations = resData.status === 'ok' && resData.mode !== 'unavailable';
+      if (canAttachCitations && (rawText.toLowerCase().includes('kras') || text.toLowerCase().includes('kras'))) {
         citationsList = [
           { id: 1, title: "Amgen Trial NCT04625647 regarding sotorasib in advanced solid tumors", url: "https://clinicaltrials.gov", excerpt: "评估针对KRAS不同亚型共价和非共价阻断剂在结直肠和胰腺癌中的缓解率比对。" },
           { id: 2, title: "Mirati Therapeutics ESMO 2024 updates of MRTX1133 Phase I expansion cohorts", url: "https://www.esmo.org", excerpt: "首个全口服靶向KRAS G12D抑制剂MRTX1133在经治胰腺癌患者中录得31%客观缓解率(ORR)。" }
         ];
-      } else if (rawText.toLowerCase().includes('胰酶') || text.toLowerCase().includes('胰酶') || text.toLowerCase().includes('pert')) {
+      } else if (canAttachCitations && (rawText.toLowerCase().includes('胰酶') || text.toLowerCase().includes('胰酶') || text.toLowerCase().includes('pert'))) {
         citationsList = [
           { id: 1, title: "Pancreatic Enzyme Replacement Therapy (PERT) Consensus Statement V4", url: "https://pubmed.ncbi.nlm.nih.gov", excerpt: "详述并设定胰腺段位切除术后及重度吸收障碍中，首口正餐需配足不少于50,000 U的高抗酸性胶囊微粒剂量。" }
         ];
@@ -318,37 +318,17 @@ export default function AIElementsPlayground({ onClose }: { onClose?: () => void
         citations: citationsList
       }]);
 
-    } catch (err) {
-      console.warn("Proxy connection fell back:", err);
-      // Let's generate a high-quality simulated elements-compliant response
-      setTimeout(() => {
-        let textSim = `### 🧬 临床病理多模型研判与深度基因链应答
-
-收到您的咨询：**"${text}"**。
-
-针对该情况，我们需要从以下几个临床维度进行评估：
-1.  **靶向潜力解析**：目前胰腺腺癌中最首要、最高敏感的基因型靶标依然为 **KRAS G12D** [1]，MRTX1133的非共价强效锁定能显著阻断MAPK下行胞内增殖因子网络。若存在 ATM / BRCA 突变，可同时寻求 [PARP抑制剂/ATR抑制剂联合方案] 实现合成致死拦截。
-2.  **化疗耐受维持与减毒对策**：如果接受了一线 NALIRIFOX (脂质体三联) [2] 方案，需要重点防治突发性骨髓抑制与延迟性急性水样腹泻，建议医生根据血常规合理在白细胞偏低时注入人红细胞生成素或重组人粒细胞刺激因子（G-CSF）。
-3.  **居家促吸收与肠胃管理**：患者腹部若因病灶压迫，日常在摄入蛋白质、高热量脂肪后有大便表面油滴等典型 EPI 指征。必须保证随主餐服用至少 50,000U-75,000U（随零食加餐25,000U以上）的微粒微囊胰酶。
-
-*💡 提供商提示：您可以通过点击左侧面板，配置您自己的提供商（例如 SiliconFlow 深度求索 DeepSeek-R1）API 密钥，沙盒将无缝接力、调用真实的深度 API 的能力！*`;
-        
-        let reasonSim = `【临床推理分析流】\n1. 捕获输入语汇："${text}"。判断主题归入胰腺癌前沿诊疗范畴及居家康护。\n2. 解析关联实体：识别到患者潜在关注靶标和吸收支持，召回NCCN诊疗图谱及ESMO胰酶消化吸收管理手册。\n3. 生成文献索引：挂接行内科学出处 [1] (NCCN Guidelines V2) 与 [2] (ESMO PERT Consensus)。\n4. 判定输出格式：遵循 AI Elements 规范，输出推理深度链、行内高亮的 citation 实体及 markdown 清晰分级结构。`;
-
-        setMessages(prev => [...prev, {
-          id: `ai-sim-${Date.now()}`,
-          sender: 'ai',
-          text: textSim,
-          time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
-          reasoning: reasonSim,
-          reasoningTimeMs: 1450,
-          isReasoningCollapsed: false,
-          citations: [
-            { id: 1, title: "NCCN Clinical Guidelines in Oncology - Pancreatic Adenocarcinoma (V2.2025)", url: "https://www.nccn.org", excerpt: "NCCN权威指南详述了一线三联NALIRIFOX与吉西他滨+白蛋白紫杉醇的临床路径与突变评估红线。" },
-            { id: 2, title: "ESMO Open Research regarding PERT dosage optimization for EPI in pancreatic cancers", url: "https://www.esmo.org", excerpt: "ESMO指南强烈提示外源性胰腺功能不全（EPI）病患每日随正餐补充至少5-7.5万及加餐2.5万单位活性胰酶的重要性。" }
-          ]
-        }]);
-      }, 1000);
+    } catch (err: any) {
+      console.warn("Proxy connection failed:", err);
+      setMessages(prev => [...prev, {
+        id: `ai-unavailable-${Date.now()}`,
+        sender: 'ai',
+        text: `### AI Elements 后端暂不可用\n\n连接到所选 provider 失败：${err.message || 'unknown error'}。\n\n系统没有生成模拟医学回答。请配置有效 API key 后重试。`,
+        time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+        reasoning: `[LLM unavailable]\nProvider: ${activeProvider}\nModel: ${selectedModel}\nError: ${err.message || 'unknown error'}`,
+        reasoningTimeMs: 0,
+        isReasoningCollapsed: false
+      }]);
     } finally {
       setIsTyping(false);
     }

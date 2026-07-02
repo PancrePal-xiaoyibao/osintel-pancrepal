@@ -31,6 +31,8 @@ export type NewsRefreshOptions = {
   sourceKey?: string;
   /** Optional callback to stream pipeline log lines (for live UI console). */
   onLog?: (line: string) => void;
+  /** When false, return an empty fallback result instead of synthetic demo items. */
+  allowSyntheticFallback?: boolean;
 };
 
 export type NewsRefreshResult = {
@@ -200,7 +202,12 @@ export async function refreshNewsWindows(options: NewsRefreshOptions): Promise<N
   const normalized = mapSearchResultsToNews(aggregateResult.results, observedAt, query);
 
   const anySourceOk = sources.some((s) => s.ok && s.count > 0);
-  const items = anySourceOk && normalized.length > 0 ? normalized : buildFallbackItems(query, observedAt);
+  const allowSyntheticFallback = options.allowSyntheticFallback !== false;
+  const items = anySourceOk && normalized.length > 0
+    ? normalized
+    : allowSyntheticFallback
+      ? buildFallbackItems(query, observedAt)
+      : [];
   const ranked = rankNewsItems(dedupeNewsItems(items));
   const windows = buildNewsRefreshWindow({ items: ranked, freshnessWindows }).windows;
 

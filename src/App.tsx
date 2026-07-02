@@ -537,10 +537,12 @@ export default function App() {
       .then(o => { if(o.status === 'ok') setWatchdog(o.data); });
 
     if (resObj.status === 'ok') {
-      setConsoleMsg('AI summary: successfully completed and compiled.');
+      setConsoleMsg(resObj.mode === 'graceful_fallback'
+        ? 'Summary compiled from existing feed items; no new AI claims were generated.'
+        : 'AI summary: successfully completed and compiled.');
       return resObj.summary;
     } else {
-      setConsoleMsg('AI summary warning: fallback compiled.');
+      setConsoleMsg('AI summary unavailable: no real LLM or extractive feed data available.');
       return '';
     }
   };
@@ -568,7 +570,7 @@ export default function App() {
 
   // 4. Trigger simulated software rollback to stable build
   const handleTriggerRollback = async () => {
-    setConsoleMsg('Autonomic Recovery: Trigerring git rollback routine...');
+    setConsoleMsg('Rollback check: verifying whether a production rollback runner is configured...');
     try {
       const resp = await fetch('/api/osint/rollback', { method: 'POST' });
       const resObj = await resp.json();
@@ -580,8 +582,12 @@ export default function App() {
         setWatchdog(petStatus.data);
       }
       
-      setConsoleMsg(`Rollback routine complete. Partition updated to: "${resObj.tag}"`);
-      return resObj.tag;
+      if (resObj.status === 'ok') {
+        setConsoleMsg(`Rollback routine complete. Partition updated to: "${resObj.tag}"`);
+        return resObj.tag;
+      }
+      setConsoleMsg(resObj.message || 'Rollback runner is unavailable in this deployment.');
+      return '';
     } catch (err) {
       setConsoleMsg('Rollback routine failed.');
       return '';
