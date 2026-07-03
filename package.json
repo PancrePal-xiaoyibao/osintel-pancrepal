@@ -1,14 +1,20 @@
 {
-  "name": "react-example",
+  "name": "osintel-pancrepal",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
+  "license": "Apache-2.0",
+  "description": "Pancreatic Cancer OSINT Intelligence Hub — autonomous open-source intelligence for pancreatic cancer.",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "tsx server.ts",
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "start": "node dist/server.cjs",
     "clean": "rm -rf dist server.js",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test": "node scripts/run-tests.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

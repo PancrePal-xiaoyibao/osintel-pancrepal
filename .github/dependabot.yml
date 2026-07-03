@@ -1,0 +1,44 @@
+# Dependabot config (T6).
+# Keeps npm dependencies and GitHub Actions versions current.
+
+version: 2
+
+updates:
+  # npm — weekly, grouped into one PR to reduce noise
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 5
+    groups:
+      react:
+        patterns: ["react", "react-dom", "@types/react", "@types/react-dom"]
+      build-tools:
+        patterns: ["vite", "esbuild", "tsx", "typescript", "@vitejs/*", "@tailwindcss/*", "tailwindcss", "autoprefixer"]
+      security:
+        update-types: ["security-update"]
+        patterns: ["*"]
+    commit-message:
+      prefix: chore(deps)
+      include: scope
+    labels:
+      - kind/refactor
+      - area/infra
+      - priority/normal
+
+  # GitHub Actions — monthly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: chore(ci)
+      include: scope
+    labels:
+      - kind/refactor
+      - area/infra
+      - priority/normal

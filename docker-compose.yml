@@ -1,0 +1,76 @@
+# docker-compose for Pancreatic Cancer OSINT Hub (T5).
+#
+# Brings up:
+#   - app    : the Node 24 full-stack server (Express + Vite-built SPA)
+#   - caddy  : reverse proxy with automatic Let's Encrypt TLS
+#
+# Copy .env.example to .env and fill JWT_SECRET + provider keys before `docker compose up -d`.
+# Data persists in the ./data bind mount (SQLite db, search-cache).
+
+services:
+  app:
+    build: .
+    image: osintel-pancrepal:latest
+    container_name: osintel-app
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      # Required in production — refuse to boot if missing.
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set}
+      # Comma-separated list of allowed CORS origins (the Caddy public URL).
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-https://osintel.example.com}
+      # Disable default admin/pancreas123 unless explicitly opted in.
+      ALLOW_DEFAULT_ACCOUNT: ${ALLOW_DEFAULT_ACCOUNT:-0}
+      # LLM provider keys (all optional — endpoints degrade gracefully when absent)
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      KNOWS_API_KEY: ${KNOWS_API_KEY:-}
+      KNOWS_BASE_URL: ${KNOWS_BASE_URL:-https://api.nullht.com}
+      ANYSEARCH_API_KEY: ${ANYSEARCH_API_KEY:-}
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+      SERPER_API_KEY: ${SERPER_API_KEY:-}
+      METASO_API_KEY: ${METASO_API_KEY:-}
+      BRAVE_API_KEY: ${BRAVE_API_KEY:-}
+      EXA_API_KEY: ${EXA_API_KEY:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - ./data:/app/data
+    expose:
+      - "3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks:
+      - osintel-net
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: osintel-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:-osintel.example.com}
+    depends_on:
+      app:
+        condition: service_healthy
+    networks:
+      - osintel-net
+
+networks:
+  osintel-net:
+    driver: bridge
+
+volumes:
+  caddy_data:
+  caddy_config:

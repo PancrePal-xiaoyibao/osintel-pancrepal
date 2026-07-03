@@ -1,0 +1,38 @@
+# Build artefacts
+dist/
+build/
+*.tsbuildinfo
+
+# Local data + caches (operator volume-mounts ./data in compose)
+data/
+cache/
+coverage/
+
+# Source control
+.git/
+.gitignore
+
+# Docs / configs that don't need to ship in the image
+docs/
+plans/
+.kiro/
+*.md
+!README.md
+
+# IDE
+.vscode/
+.idea/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Tests — not needed at runtime
+tests/
+
+# Misc
+.DS_Store
+*.log
+npm-debug.log*
+node_modules/
