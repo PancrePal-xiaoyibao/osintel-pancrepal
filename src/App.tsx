@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useEffect, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { OSINTItem, WatchdogStatus, ResourceCenter, SystemReport15Day, PatientProfile } from './types';
 import OSINTFeedView from './components/OSINTFeedView';
 import UserAuth from './components/UserAuth';
@@ -7,16 +7,17 @@ import { onAuthStateChanged } from 'firebase/auth';
 import { loadPatientProfileFromCloud, savePatientProfileToCloud, deletePatientProfileFromCloud } from './lib/firestore-sync';
 import { getLlmProvider, LLM_PROVIDER_IDS } from './lib/llm-providers';
 import { MOCK_15DAY_REPORT, INITIAL_OSINT_FEED, INITIAL_RESOURCE_CENTERS } from './seed-data';
-import { 
-  Activity, 
-  Terminal, 
-  Map, 
-  ShieldAlert, 
-  Database, 
-  Cpu, 
-  BookOpen, 
-  Sparkles, 
-  Share2, 
+import {
+  Activity,
+  Terminal,
+  Map,
+  ShieldAlert,
+  AlertTriangle,
+  Database,
+  Cpu,
+  BookOpen,
+  Sparkles,
+  Share2,
   HeartPulse,
   Info,
   FileText,
@@ -71,6 +72,20 @@ export default function App() {
   const [consoleMsg, setConsoleMsg] = useState('System initialized.');
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmissionOpen, setIsSubmissionOpen] = useState(false);
+  // T7: static-deploy banner — true when the bundled seed dataset is being rendered because the
+  // API server is unreachable. Surfaced as an amber banner so users know they're not seeing live data.
+  const [isStaticDeployMode, setIsStaticDeployMode] = useState(false);
+  // T7: hold the active SSE connection + safety-timeout handle so we can close them on unmount
+  // (prevents leaked EventSource + setTimeout pairs when navigating away mid-search).
+  const activeSseRef = useRef<EventSource | null>(null);
+  const activeSseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      // Cleanup on unmount: tear down any in-flight SSE + pending safety timeout.
+      try { activeSseRef.current?.close(); } catch { /* ignore */ }
+      if (activeSseTimeoutRef.current) clearTimeout(activeSseTimeoutRef.current);
+    };
+  }, []);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [feedSearchTerm, setFeedSearchTerm] = useState('');
 
@@ -286,12 +301,18 @@ export default function App() {
     setSearchLog([]);
     setConsoleMsg(`检索调度启动: "${query}"`);
 
+    // T7: close any previous in-flight SSE before starting a new one — otherwise rapid
+    // re-clicks accumulate leaked EventSource connections.
+    try { activeSseRef.current?.close(); } catch { /* ignore */ }
+    if (activeSseTimeoutRef.current) clearTimeout(activeSseTimeoutRef.current);
+
     // Stream live log lines from the server via SSE; update the feed on 'done'.
     return new Promise<void>((resolve) => {
       let settled = false;
       let es: EventSource | null = null;
       try {
         es = new EventSource(`/api/osint/feed/refresh-stream?query=${encodeURIComponent(query)}`);
+        activeSseRef.current = es;
       } catch {
         // EventSource unavailable — fall back to POST below.
       }
@@ -300,6 +321,11 @@ export default function App() {
         if (settled) return;
         settled = true;
         es?.close();
+        activeSseRef.current = null;
+        if (activeSseTimeoutRef.current) {
+          clearTimeout(activeSseTimeoutRef.current);
+          activeSseTimeoutRef.current = null;
+        }
         setIsFetching(false);
         resolve();
       };
@@ -309,6 +335,7 @@ export default function App() {
         setConsoleMsg('检索超时，保留现有情报快照。');
         finish();
       }, 90000);
+      activeSseTimeoutRef.current = timeout;
 
       if (!es) {
         clearTimeout(timeout);
@@ -430,6 +457,7 @@ export default function App() {
         setCenters(coordObj.data?.length ? coordObj.data : INITIAL_RESOURCE_CENTERS);
         setWatchdog(dogObj.data || null);
         setRuntimeHealth(healthObj.data || null);
+        setIsStaticDeployMode(false); // T7: API server reachable — clear the banner.
       } catch (err) {
         console.error('Failed to sync state from full-stack server endpoints, utilizing offline fallback:', err);
         // Frontend-only / static deploy fallback: render the bundled seed data
@@ -439,6 +467,7 @@ export default function App() {
         setNewsWindowLabel('30d');
         setCenters(INITIAL_RESOURCE_CENTERS);
         setConsoleMsg('API Server unreachable. Loaded bundled offline dataset (news + centers).');
+        setIsStaticDeployMode(true); // T7: surface the static-deploy banner so users know.
       } finally {
         setIsLoading(false);
       }
@@ -656,6 +685,17 @@ export default function App() {
           {t.bannerTitle}
         </span>
       </div>
+
+      {/* T7: static-deploy banner — surface when the bundled seed dataset is being rendered
+          because the API server is unreachable. Users must not mistake this for live data. */}
+      {isStaticDeployMode && (
+        <div className="bg-amber-950/60 border-b border-amber-500/40 text-amber-200 text-[11px] sm:text-xs py-2 px-6 text-center flex justify-center items-center gap-2 select-none leading-normal shrink-0">
+          <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400" />
+          <span className="font-sans">
+            ⚠️ 静态部署模式 · 当前显示打包快照，非实时数据（Static/seed-only mode — bundled snapshot, not live data）。
+          </span>
+        </div>
+      )}
 
       {/* Main Header Wrapper */}
       <header className="border-b border-white/10 px-4 sm:px-8 py-4 flex flex-col md:flex-row justify-between md:items-center gap-4 glass z-40 sticky top-0 backdrop-blur-md">
@@ -1113,7 +1153,7 @@ export default function App() {
               <TargetInsightView 
                 items={items}
                 onSelectFeedFilter={setFeedSearchTerm}
-                onNavigateToTab={setActiveTab}
+                onNavigateToTab={(tab) => setActiveTab(tab as typeof activeTab)}
                 onItemsChange={setItems}
                 patientProfile={profile}
                 perspective={perspective}
@@ -1150,7 +1190,8 @@ export default function App() {
 
           {activeTab === 'guidelines' && (
             <Suspense fallback={<div className="rounded-2xl border border-white/10 bg-zinc-950/80 p-6 text-sm text-zinc-400">Loading guidelines...</div>}>
-              <GuidelinesView language={activeLanguage} />
+              {/* pre-existing: GuidelinesView has no language prop in its current type signature */}
+              <GuidelinesView />
             </Suspense>
           )}
 
@@ -1162,9 +1203,9 @@ export default function App() {
 
           {activeTab === 'help' && (
             <Suspense fallback={<div className="rounded-2xl border border-white/10 bg-zinc-950/80 p-6 text-sm text-zinc-400">Loading help...</div>}>
-              <HelpView 
-                language={activeLanguage}
-                onNavigateToTab={setActiveTab}
+              <HelpView
+                language={activeLanguage as 'ZH' | 'EN'}
+                onNavigateToTab={(tab) => setActiveTab(tab as typeof activeTab)}
               />
             </Suspense>
           )}

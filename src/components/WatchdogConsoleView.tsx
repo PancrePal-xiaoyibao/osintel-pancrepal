@@ -65,6 +65,19 @@ export default function WatchdogConsoleView({
   return (
     <div className="space-y-6 animate-fade-in">
 
+      {/* T7: DEMO watermark — the watchdog / repair / rollback surface is demo_only per the
+          mock-audit mode contract. Make that visible to users so they don't treat the
+          self-healing / rollback animations as real production capability. */}
+      <div className="p-3 bg-amber-500/10 border border-amber-500/30 text-amber-200 text-xs rounded-xl flex items-start gap-3 glass">
+        <span className="shrink-0 px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-bold tracking-wider">DEMO</span>
+        <span className="leading-relaxed">
+          此面板为演示视图（demo_only）。所展示的 CPU/内存/自愈动作/版本回滚等数据均为示例，不反映真实生产运维状态。
+          真实健康检查请访问 <code className="px-1 py-0.5 rounded bg-black/40 text-amber-300">/healthz</code>、
+          <code className="px-1 py-0.5 rounded bg-black/40 text-amber-300">/readyz</code>、
+          <code className="px-1 py-0.5 rounded bg-black/40 text-amber-300">/api/ops/status</code>。
+        </span>
+      </div>
+
       {/* Success alert */}
       {successActionText && (
         <div className="p-4 bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-xs font-semibold rounded-xl flex items-center gap-3 animate-fade-in glass">
