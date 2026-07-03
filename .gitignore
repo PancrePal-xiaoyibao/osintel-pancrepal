@@ -7,3 +7,6 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Local MCP / agent cache (T7 cleanup)
+cache/

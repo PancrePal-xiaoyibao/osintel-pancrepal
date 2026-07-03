@@ -202,11 +202,22 @@ export async function refreshNewsWindows(options: NewsRefreshOptions): Promise<N
   const normalized = mapSearchResultsToNews(aggregateResult.results, observedAt, query);
 
   const anySourceOk = sources.some((s) => s.ok && s.count > 0);
-  const allowSyntheticFallback = options.allowSyntheticFallback !== false;
+  // T7/BE-M5/BE-M7: synthetic fallback items are templated medical-sounding content
+  // (e.g. "Pancreatic trial reports KRAS target update") that can mislead non-expert readers.
+  // Default OFF in production; dev/test can opt in via allowSyntheticFallback:true or
+  // NEWS_ALLOW_SYNTHETIC_FALLBACK=1.
+  const isProd = process.env.NODE_ENV === 'production';
+  const allowSyntheticFallback = options.allowSyntheticFallback === true
+    || (options.allowSyntheticFallback === undefined && !isProd)
+    || process.env.NEWS_ALLOW_SYNTHETIC_FALLBACK === '1';
   const items = anySourceOk && normalized.length > 0
     ? normalized
     : allowSyntheticFallback
-      ? buildFallbackItems(query, observedAt)
+      ? buildFallbackItems(query, observedAt).map((it) => ({
+          ...it,
+          sourceKey: 'fallback',
+          demo: true as const
+        } as NewsNormalizedItem & { demo?: boolean }))
       : [];
   const ranked = rankNewsItems(dedupeNewsItems(items));
   const windows = buildNewsRefreshWindow({ items: ranked, freshnessWindows }).windows;

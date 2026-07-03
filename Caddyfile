@@ -1,0 +1,44 @@
+# Caddy reverse proxy for the OSINT Hub (T5).
+#
+# Caddy automatically provisions and renews a Let's Encrypt TLS certificate for {$APP_DOMAIN}.
+# It terminates TLS, adds HSTS + security headers, proxies to the app container on :3000,
+# and surfaces /healthz for its own active health checks.
+#
+# Copy this file, set APP_DOMAIN in your .env, and `docker compose up -d`.
+
+{$APP_DOMAIN} {
+	encode gzip zstd
+
+	header {
+		# Strict Transport Security — 1 year, include subdomains
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		# Don't allow the app to be framed (clickjacking defense)
+		X-Frame-Options "SAMEORIGIN"
+		# MIME sniffing defense
+		X-Content-Type-Options "nosniff"
+		# Referrer policy
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# Permissions policy — disable sensitive browser features
+		Permissions-Policy "geolocation=(), microphone=(), camera=()"
+		# Remove the Caddy Server header (minor info leak)
+		-Server
+	}
+
+	# Proxy everything to the Node app
+	reverse_proxy app:3000 {
+		# Active health check via /healthz
+		health_uri /healthz
+		health_interval 30s
+		health_timeout 5s
+		# Trust upstream headers
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+
+	# Access log to stdout (Caddy structured JSON)
+	log {
+		output stdout
+		format json
+	}
+}
