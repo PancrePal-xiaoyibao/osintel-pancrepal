@@ -1,4 +1,4 @@
-import { OSINTItem, ResourceCenter, SystemReport15Day } from './types';
+import type { OSINTItem, ResourceCenter, SystemReport15Day } from './types';
 
 export const INITIAL_OSINT_FEED: OSINTItem[] = [
   {

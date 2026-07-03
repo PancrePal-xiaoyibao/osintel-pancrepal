@@ -7,7 +7,7 @@ import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import { INITIAL_OSINT_FEED, INITIAL_RESOURCE_CENTERS, MOCK_15DAY_REPORT } from './src/seed-data';
-import { OSINTItem, WatchdogStatus, ErrorLogEntry, OSINTCategory, EvidenceLevel } from './src/types';
+import { OSINTItem, WatchdogStatus, ErrorLogEntry, OSINTCategory, EvidenceLevel, ResourceCenter } from './src/types';
 import { runHealthCheck } from './src/lib/health-check';
 import { buildExtractiveDailySummary, responseMode, unavailableChatResponse } from './src/lib/mock-audit.ts';
 import { refreshNewsWindows } from './src/lib/news/refresh.ts';
@@ -21,18 +21,74 @@ import { callChatModel } from './src/lib/research/llm-call.ts';
 import { knowsSearch, knowsMultiSearch, isKnowsSource, KNOWS_SOURCE_IDS, type KnowsSource } from './src/lib/knows/knows-client.ts';
 import { normalizeEvidences } from './src/lib/knows/normalize.ts';
 import type { PatientProfile } from './src/types';
+
+// Production hardening (T1/T2/T3/T4): structured logger, security middleware, auth, SSRF guard, SQLite.
+import { logger } from './src/server/logger.ts';
+import { requestIdMiddleware } from './src/server/middleware/request-id.ts';
+import {
+  coreSecurityMiddleware,
+  authRateLimit,
+  llmRateLimit
+} from './src/server/middleware/security.ts';
+import {
+  asyncHandler,
+  globalErrorHandler,
+  notFoundHandler,
+  type AppError
+} from './src/server/middleware/error.ts';
+import { requireAuth } from './src/server/middleware/auth.ts';
+import { signAccessToken, verifyAccessToken } from './src/server/auth/jwt.ts';
+import { hashPassword, verifyPassword, isBcryptHash } from './src/server/auth/password.ts';
+import { assertSafeProviderUrl, SsrfError } from './src/server/security/ssrf-guard.ts';
+import { getDb, closeDb } from './src/server/db/index.ts';
+import {
+  listOsintItems,
+  upsertOsintItem,
+  upsertOsintItems,
+  countOsintItems
+} from './src/server/db/repositories/osint-items.ts';
+import { listResourceCenters, upsertResourceCenter } from './src/server/db/repositories/resource-centers.ts';
+import {
+  findUser,
+  createUser,
+  touchLastLogin,
+  countUsers,
+  ensureDefaultAccount
+} from './src/server/db/repositories/users.ts';
+import { logEvent, listRecentEvents, trimEventLog } from './src/server/db/repositories/event-log.ts';
 import dotenv from 'dotenv';
 
 // Load environment variables
 dotenv.config();
 
 const app = express();
-const PORT = 3000;
+const PORT = parseInt(process.env.PORT || '3000', 10);
 
-app.use(express.json());
+// pino-http-style request logging (lightweight; full pino-http middleware would also work)
+app.use((req, res, next) => {
+  const start = Date.now();
+  res.on('finish', () => {
+    const duration = Date.now() - start;
+    logger.info({
+      reqId: (req as any).id,
+      method: req.method,
+      path: req.path,
+      status: res.statusCode,
+      durationMs: duration
+    }, 'request');
+  });
+  next();
+});
 
-// In-memory data state
-let osintFeed: OSINTItem[] = [...INITIAL_OSINT_FEED];
+// Production middleware stack (T1)
+app.use(requestIdMiddleware);
+app.use(express.json({ limit: '1mb' })); // bound body size — defense against body bombs
+app.use(...coreSecurityMiddleware);
+
+// Persistent state (T4): backed by SQLite. We hold an in-process read-through cache so
+// request handlers stay synchronous; writes update the DB then refresh the cache.
+// `getDb()` lazily bootstraps the schema and seeds from INITIAL_OSINT_FEED if cold.
+let osintFeed: OSINTItem[] = listOsintItems();
 let cachedNewsRefresh: {
   refreshedAt: string;
   expiresAt: number;
@@ -41,7 +97,7 @@ let cachedNewsRefresh: {
   mode: 'aggregate' | 'fallback';
   sources: { source: string; ok: boolean; count: number; reason?: string }[];
 } | null = null;
-const resourceCenters = [...INITIAL_RESOURCE_CENTERS].map(center => {
+let resourceCenters: ResourceCenter[] = listResourceCenters().map(center => {
   if (!center.explicitCategory) {
     const text = (center.name + ' ' + center.description + ' ' + center.specialties.join(' ')).toLowerCase();
     let cat: 'treatment' | 'complication' | 'psychology' | 'nutrition' = 'treatment';
@@ -121,7 +177,13 @@ async function refreshNewsFeed(query = 'pancreatic cancer', onLog?: (line: strin
   });
 
   const mapped = mapNewsItems(refreshed.items);
-  osintFeed = [...mapped, ...INITIAL_OSINT_FEED].slice(0, 300);
+  // T4: persist new items to SQLite, then refresh the in-memory cache (no INITIAL_OSINT_FEED
+  // injection — seed data is persisted on first boot, mixing it back in here would crowd out
+  // fresh results).
+  if (mapped.length > 0) {
+    upsertOsintItems(mapped);
+  }
+  osintFeed = listOsintItems(300);
   cachedNewsRefresh = {
     refreshedAt: refreshed.refreshedAt,
     expiresAt: Date.now() + 5 * 60 * 1000,
@@ -378,17 +440,27 @@ app.get('/api/osint/feed/cache-list', (req, res) => {
 });
 
 // 1.5 Manual Source Ingestion & Clinical Quality Validator
-app.post('/api/osint/manual-ingest', (req, res) => {
+app.post('/api/osint/manual-ingest', requireAuth, (req, res) => {
   const { title, url, source, country, category, entities, summary, evidenceLevel, clinicalTrialId } = req.body;
 
   // Track state and log check starting
   watchdogStatus.apiQuotaUsed += 1;
 
   if (!title || !url || !summary || !source) {
-    return res.status(400).json({ 
-      status: 'error', 
-      message: '请填写完整的学术投递信息：包括标题、URL链接、原始信源及科学摘要。' 
+    return res.status(400).json({
+      status: 'error',
+      message: '请填写完整的学术投递信息：包括标题、URL链接、原始信源及科学摘要。'
     });
+  }
+
+  // URL protocol whitelist (T1/BE-C6): only http/https to block javascript:/data:/file: XSS.
+  try {
+    const parsed = new URL(String(url));
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      return res.status(400).json({ status: 'error', message: 'URL 必须以 http:// 或 https:// 开头。' });
+    }
+  } catch {
+    return res.status(400).json({ status: 'error', message: 'URL 格式不合规。' });
   }
 
   // Quality check algorithm:
@@ -458,15 +530,15 @@ app.post('/api/osint/manual-ingest', (req, res) => {
   };
 
   if (isAccepted) {
-    // Add to core feed
-    osintFeed.unshift(newItem);
+    // T4: persist to SQLite + refresh in-memory cache (replaces osintFeed.unshift)
+    upsertOsintItem(newItem);
+    osintFeed = listOsintItems(300);
 
-    // Update watchdog logs
-    watchdogStatus.errorLog.unshift({
-      time: new Date().toISOString(),
-      level: 'INFO',
-      message: `Manual Ingestion Approved (Quality Score: ${score}). Title: "${title}". Stream merged.`,
-      classification: 'Academic Contrib Approved'
+    // T4: append to event_log (replaces watchdogStatus.errorLog.unshift)
+    logEvent('INFO', 'manual-ingest', `Manual Ingestion Approved (Quality Score: ${score}). Title: "${title}". Stream merged.`, {
+      user: (req as any).user?.username,
+      score,
+      url
     });
 
     res.json({
@@ -479,12 +551,9 @@ app.post('/api/osint/manual-ingest', (req, res) => {
     });
   } else {
     // Rejected
-    // Update watchdog logs
-    watchdogStatus.errorLog.unshift({
-      time: new Date().toISOString(),
-      level: 'WARNING',
-      message: `Manual Ingestion Rejected (Relevance Score: ${score}). Title: "${title}". Academic quality score below margin.`,
-      classification: 'Contrib Quality Block'
+    logEvent('WARNING', 'manual-ingest', `Manual Ingestion Rejected (Relevance Score: ${score}). Title: "${title}". Academic quality score below margin.`, {
+      user: (req as any).user?.username,
+      score
     });
 
     res.json({
@@ -659,7 +728,7 @@ app.get('/api/ops/status', (_req, res) => {
 });
 
 // 5. Trigger automated self-healing action in watchdog
-app.post('/api/osint/watchdog/repair', (req, res) => {
+app.post('/api/osint/watchdog/repair', requireAuth, (req, res) => {
   watchdogStatus.status = 'healthy';
   watchdogStatus.selfHealedCount += 1;
   const nowStr = new Date().toISOString();
@@ -700,7 +769,7 @@ app.get('/api/osint/report', (req, res) => {
 });
 
 // 8. Trigger self-healing rollback to previous stable version
-app.post('/api/osint/rollback', (req, res) => {
+app.post('/api/osint/rollback', requireAuth, (req, res) => {
   const nowStr = new Date().toISOString();
   watchdogStatus.errorLog.unshift({
     time: nowStr,
@@ -821,69 +890,81 @@ function resolveLlmConfig(clientConfig: any): { provider: string; apiKey: string
 }
 
 // ============================================================================
-// Local username/password auth — /api/auth/* (test-friendly, in-memory)
-// NOTE: in-memory + plaintext compare; for local/demo use only, not production.
+// Local username/password auth — /api/auth/* (T2: bcrypt + signed JWT + SQLite)
+// Plaintext password storage and base64 pseudo-tokens are removed.
 // ============================================================================
-type LocalUser = { username: string; password: string; displayName: string };
-const localUsers = new Map<string, LocalUser>();
-
-function defaultCreds(): { username: string; password: string } {
-  return {
-    username: (process.env.DEFAULT_USERNAME || 'admin').trim(),
-    password: (process.env.DEFAULT_PASSWORD || 'pancreas123').trim()
-  };
-}
-
-function makeToken(username: string): string {
-  return Buffer.from(`${username}:${Date.now()}`).toString('base64');
-}
-
-function buildAuthUser(username: string, displayName?: string) {
+function buildAuthUser(username: string, displayName?: string, role: 'user' | 'admin' = 'user') {
   return {
     uid: `local-${username}`,
     username,
     displayName: displayName || username,
     email: `${username}@local.osintel`,
+    role,
     local: true
   };
 }
 
-app.post('/api/auth/register', (req, res) => {
+// Username must be alphanumeric + dash/underscore, 3-32 chars. Avoids unicode homoglyphs.
+function isValidUsername(username: string): boolean {
+  return /^[a-zA-Z0-9_-]{3,32}$/.test(username);
+}
+
+app.post('/api/auth/register', authRateLimit, asyncHandler(async (req, res) => {
   const username = String(req.body?.username || '').trim();
   const password = String(req.body?.password || '');
   const displayName = String(req.body?.displayName || '').trim();
   if (!username || !password) {
     return res.status(400).json({ status: 'error', message: '请填写用户名和密码。' });
   }
-  if (username.length < 3 || password.length < 4) {
-    return res.status(400).json({ status: 'error', message: '用户名至少3位，密码至少4位。' });
+  if (!isValidUsername(username)) {
+    return res.status(400).json({ status: 'error', message: '用户名 3-32 位，仅限字母/数字/下划线/连字符。' });
   }
-  if (username === defaultCreds().username || localUsers.has(username)) {
+  if (password.length < 8) {
+    return res.status(400).json({ status: 'error', message: '密码至少 8 位。' });
+  }
+  if (findUser(username)) {
     return res.status(409).json({ status: 'error', message: '该用户名已存在，请直接登录。' });
   }
-  localUsers.set(username, { username, password, displayName: displayName || username });
-  res.json({ status: 'ok', message: '注册成功，请登录。', user: buildAuthUser(username, displayName) });
-});
+  await createUser(username, password, 'user');
+  const token = signAccessToken({ uid: `local-${username}`, username, role: 'user' });
+  logger.info({ username, requestId: (req as any).id }, 'user_registered');
+  res.json({
+    status: 'ok',
+    message: '注册成功。',
+    token,
+    user: buildAuthUser(username, displayName || username, 'user')
+  });
+}));
 
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', authRateLimit, asyncHandler(async (req, res) => {
   const username = String(req.body?.username || '').trim();
   const password = String(req.body?.password || '');
   if (!username || !password) {
     return res.status(400).json({ status: 'error', message: '请填写用户名和密码。' });
   }
 
-  const def = defaultCreds();
-  if (username === def.username && password === def.password) {
-    return res.json({ status: 'ok', token: makeToken(username), user: buildAuthUser(username, '默认测试用户') });
+  const user = findUser(username);
+  // Constant message whether the user exists or not — don't leak username enumeration.
+  if (!user) {
+    logger.warn({ username, requestId: (req as any).id }, 'login_failed_user_not_found');
+    return res.status(401).json({ status: 'error', message: '用户名或密码错误。' });
   }
 
-  const found = localUsers.get(username);
-  if (found && found.password === password) {
-    return res.json({ status: 'ok', token: makeToken(username), user: buildAuthUser(username, found.displayName) });
+  const ok = await verifyPassword(password, user.password_hash);
+  if (!ok) {
+    logger.warn({ username, requestId: (req as any).id }, 'login_failed_bad_password');
+    return res.status(401).json({ status: 'error', message: '用户名或密码错误。' });
   }
 
-  return res.status(401).json({ status: 'error', message: '用户名或密码错误。' });
-});
+  touchLastLogin(username);
+  const token = signAccessToken({ uid: `local-${username}`, username, role: user.role });
+  logger.info({ username, requestId: (req as any).id }, 'login_ok');
+  res.json({
+    status: 'ok',
+    token,
+    user: buildAuthUser(username, username, user.role)
+  });
+}));
 
 // ============================================================================
 // KnowS evidence search — /api/knows/* (shared base search capability)
@@ -1139,7 +1220,7 @@ app.post('/api/personal/assistant', async (req, res) => {
 });
 
 // P1: Batch LLM translation for English research content (papers/trials/news)
-app.post('/api/personal/translate', async (req, res) => {
+app.post('/api/personal/translate', requireAuth, llmRateLimit, async (req, res) => {
   watchdogStatus.apiQuotaUsed += 1;
   const { items, config: clientConfig } = req.body;
   if (!Array.isArray(items) || items.length === 0) {
@@ -1222,7 +1303,7 @@ app.post('/api/personal/translate', async (req, res) => {
 });
 
 // 10. Multi-Provider AI Elements Custom Gateway Proxy Endpoint
-app.post('/api/osint/chat-custom', async (req, res) => {
+app.post('/api/osint/chat-custom', requireAuth, llmRateLimit, async (req, res) => {
   const { messages, config, attachments } = req.body;
   if (!messages || !Array.isArray(messages)) {
     return res.status(400).json({ status: 'error', message: '消息历史不合规。' });
@@ -1235,6 +1316,26 @@ app.post('/api/osint/chat-custom', async (req, res) => {
   const apiKey = (config?.apiKey || '').trim();
   let rawModel = config?.model || 'auto';
   const rawBaseUrl = (config?.baseUrl || '').trim();
+
+  // T3 SSRF guard: validate any client-supplied baseUrl BEFORE forwarding to fetch.
+  // Default provider baseUrls (whitelisted hosts) skip this; only custom overrides are checked.
+  if (rawBaseUrl) {
+    try {
+      await assertSafeProviderUrl(rawBaseUrl);
+    } catch (err) {
+      if (err instanceof SsrfError) {
+        logger.warn({ reqId: (req as any).id, user: (req as any).user?.username, provider, code: err.code, detail: err.message }, 'ssrf_blocked');
+        return res.status(422).json({
+          status: 'error',
+          mode: 'unavailable',
+          reason: err.code,
+          code: err.code,
+          requestId: (req as any).id || 'unknown'
+        });
+      }
+      throw err;
+    }
+  }
 
   // Model Auto-Selection
   if (!rawModel || rawModel === 'auto') {
@@ -1431,11 +1532,25 @@ app.post('/api/osint/chat-custom', async (req, res) => {
   });
 });
 
+// ============================================================================
+// Global error handler — must be registered AFTER all routes and BEFORE the
+// SPA fallback. Express recognizes the 4-arg signature and routes errors here.
+// (T1/BE-C4)
+// ============================================================================
+app.use(globalErrorHandler);
+
 // Set up server side static file routing & Vite middleware
 async function startServer() {
+  // T2: ensure the default dev/admin account exists (no-op in prod unless opted in).
+  try {
+    await ensureDefaultAccount();
+  } catch (err) {
+    logger.error({ err: (err as Error).message }, 'ensure_default_account_failed');
+  }
+
   if (process.env.NODE_ENV !== 'production') {
     // In development mode, mount Vite as middleware
-    console.log('Mounting Vite dev server middleware in full-stack...');
+    logger.info('mounting_vite_dev_middleware');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa'
@@ -1450,28 +1565,69 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`=======================================================`);
-    console.log(`OSINT Intelligence Hub Server running on http://0.0.0.0:${PORT}`);
-    console.log(`API credentials status: ${process.env.GEMINI_API_KEY ? 'Available' : 'Missing (AI endpoints report unavailable or extractive fallback)'}`);
-    console.log(`=======================================================`);
+  const httpServer = app.listen(PORT, '0.0.0.0', () => {
+    logger.info({ port: PORT, gemini: Boolean(process.env.GEMINI_API_KEY) }, 'server_listening');
+    logger.info(`OSINT Intelligence Hub Server running on http://0.0.0.0:${PORT}`);
 
     // Background 5-minute auto-refresh: search → persist to file → next poll reads fresh file.
-    // This keeps the feed live without waiting for a user to trigger refresh.
+    // (T5/BE-M2) Self-scheduling with in-flight guard + jitter so replicas don't stampede upstreams.
     const REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+    const EVENT_TRIM_INTERVAL_MS = 60 * 60 * 1000; // trim event_log hourly
+    let refreshInFlight = false;
     const autoRefresh = async () => {
+      if (refreshInFlight) {
+        logger.warn('auto_refresh_skipped_in_flight');
+        return;
+      }
+      refreshInFlight = true;
       try {
-        console.log('[auto-refresh] Starting scheduled news aggregation...');
+        logger.info('auto_refresh_start');
         await refreshNewsFeed('pancreatic cancer');
-        console.log('[auto-refresh] Done. Next in 5 minutes.');
+        logger.info('auto_refresh_done');
       } catch (err) {
-        console.error('[auto-refresh] Failed:', err);
+        logger.error({ err: (err as Error).message }, 'auto_refresh_failed');
+      } finally {
+        refreshInFlight = false;
       }
     };
     // First refresh shortly after startup (10s delay to let Vite finish)
-    setTimeout(autoRefresh, 10000);
-    setInterval(autoRefresh, REFRESH_INTERVAL_MS);
+    const refreshTimer = setTimeout(autoRefresh, 10000);
+    const refreshInterval = setInterval(autoRefresh, REFRESH_INTERVAL_MS);
+    refreshInterval.unref?.();
+
+    const eventTrimInterval = setInterval(() => {
+      try {
+        const removed = trimEventLog();
+        if (removed > 0) logger.info({ removed }, 'event_log_trimmed');
+      } catch (err) {
+        logger.warn({ err: (err as Error).message }, 'event_log_trim_failed');
+      }
+    }, EVENT_TRIM_INTERVAL_MS);
+    eventTrimInterval.unref?.();
+
+    // T5/BE-M2: graceful shutdown on SIGTERM/SIGINT (Docker, systemd, PM2 all send SIGTERM).
+    const shutdown = (signal: string) => {
+      logger.info({ signal }, 'shutdown_signal_received');
+      clearInterval(refreshInterval);
+      clearInterval(eventTrimInterval);
+      clearTimeout(refreshTimer);
+      httpServer.close(() => {
+        logger.info('http_server_closed');
+        closeDb();
+        process.exit(0);
+      });
+      // Hard exit if close hangs (e.g. stuck SSE connection) — 10s safety net.
+      setTimeout(() => {
+        logger.warn('shutdown_force_exit');
+        process.exit(1);
+      }, 10000).unref();
+    };
+    process.on('SIGTERM', () => shutdown('SIGTERM'));
+    process.on('SIGINT', () => shutdown('SIGINT'));
   });
 }
 
-startServer();
+startServer().catch((err) => {
+  logger.error({ err: err.message, stack: err.stack }, 'server_start_failed');
+  process.exit(1);
+});
