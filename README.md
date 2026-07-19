@@ -159,6 +159,10 @@ available. Configure `LLM_API_KEY` or `GEMINI_API_KEY` for model output.
 - `npm run lint` — TypeScript type-check (`tsc --noEmit`)
 - `node tests/<name>.test.mjs` — run a contract test
 
+## Contributors
+
+[![contrib.rocks image](https://contrib.rocks/image?repo=PancrePal-xiaoyibao/osintel-pancrepal&columns=12&max=60)](https://contrib.rocks/repo?repo=PancrePal-xiaoyibao/osintel-pancrepal)
+
 ## Documentation
 
 - Product requirements: [docs/design/PRD.md](./docs/design/PRD.md)
