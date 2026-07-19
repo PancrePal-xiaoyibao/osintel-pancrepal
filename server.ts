@@ -21,6 +21,15 @@ import { callChatModel } from './src/lib/research/llm-call.ts';
 import { knowsSearch, knowsMultiSearch, isKnowsSource, KNOWS_SOURCE_IDS, type KnowsSource } from './src/lib/knows/knows-client.ts';
 import { normalizeEvidences } from './src/lib/knows/normalize.ts';
 import type { PatientProfile } from './src/types';
+import { initSources, listSources, getSource, addSource, updateSource, removeSource, fetchFeed, checkFeedHealth, recordFetch } from './src/lib/rss-fetcher/index.ts';
+import type { FeedSource } from './src/lib/rss-fetcher/types.ts';
+import { getScheduler } from './src/lib/scheduler/index.ts';
+import { readFeedCache, listCacheFiles, readCacheFile, getCacheDir } from './src/lib/cache/index.ts';
+import { createFilterEngine } from './src/lib/filtering/engine.ts';
+import type { FilterParams } from './src/lib/filtering/types.ts';
+import { createCredibilityEngine } from './src/lib/credibility/engine.ts';
+import { createExportPipeline } from './src/lib/export/pipeline.ts';
+import type { ExportFormat } from './src/lib/export/types.ts';
 import dotenv from 'dotenv';
 
 // Load environment variables
@@ -1431,6 +1440,236 @@ app.post('/api/osint/chat-custom', async (req, res) => {
   });
 });
 
+// ============================================================================
+// RSS/Atom Feed Source Management
+// ============================================================================
+
+// Initialize built-in 20+ medical RSS sources on startup
+initSources();
+
+// GET /api/osint/sources — list all registered feed sources
+app.get('/api/osint/sources', (req, res) => {
+  const enabledOnly = req.query.enabled !== 'false';
+  const sources = listSources().filter((s) => enabledOnly ? s.enabled : true);
+  res.json({ ok: true, sources });
+});
+
+// POST /api/osint/sources — register a new feed source
+app.post('/api/osint/sources', (req, res) => {
+  const body = req.body || {};
+  if (!body.id || !body.name || !body.url) {
+    return res.status(400).json({ ok: false, error: 'id, name, and url are required' });
+  }
+  // Validate source ID format
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(body.id)) {
+    return res.status(400).json({ ok: false, error: 'id must match /^[a-z0-9][a-z0-9-]*$/' });
+  }
+  // SSRF protection
+  try {
+    const parsed = new URL(body.url);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return res.status(400).json({ ok: false, error: 'URL must use http:// or https://' });
+    }
+  } catch {
+    return res.status(400).json({ ok: false, error: 'Invalid URL format' });
+  }
+  if (getSource(body.id)) {
+    return res.status(409).json({ ok: false, error: `Source '${body.id}' already exists` });
+  }
+  const source = addSource({
+    id: body.id,
+    name: body.name,
+    url: body.url,
+    kind: body.kind || 'news',
+    credibilityBase: body.credibilityBase ?? 50,
+    enabled: body.enabled !== false,
+    refreshIntervalMinutes: body.refreshIntervalMinutes || 60,
+    maxItems: body.maxItems || 50,
+  });
+  res.status(201).json({ ok: true, source });
+});
+
+// PUT /api/osint/sources/:id — update an existing feed source
+app.put('/api/osint/sources/:id', (req, res) => {
+  const { id } = req.params;
+  const body = req.body || {};
+  const updated = updateSource(id, body);
+  if (!updated) {
+    return res.status(404).json({ ok: false, error: `Source '${id}' not found` });
+  }
+  res.json({ ok: true, source: updated });
+});
+
+// DELETE /api/osint/sources/:id — remove a feed source
+app.delete('/api/osint/sources/:id', (req, res) => {
+  const { id } = req.params;
+  const deleted = removeSource(id);
+  if (!deleted) {
+    return res.status(404).json({ ok: false, error: `Source '${id}' not found` });
+  }
+  res.json({ ok: true });
+});
+
+// GET /api/osint/sources/:id/health — check feed source health
+app.get('/api/osint/sources/:id/health', async (req, res) => {
+  const { id } = req.params;
+  const source = getSource(id);
+  if (!source) {
+    return res.status(404).json({ ok: false, error: `Source '${id}' not found` });
+  }
+  const health = await checkFeedHealth(source);
+  res.json({
+    ok: true,
+    sourceId: id,
+    online: health.online,
+    responseTimeMs: health.responseTimeMs,
+    itemCount: health.itemCount,
+    lastChecked: new Date().toISOString(),
+    error: health.error,
+  });
+});
+
+// POST /api/osint/sources/refresh — manually trigger feed refresh (one or all)
+app.post('/api/osint/sources/refresh', async (req, res) => {
+  const { sourceId } = req.body || {};
+  const sources = sourceId ? [getSource(sourceId)].filter(Boolean) as FeedSource[] : listSources().filter((s) => s.enabled);
+  if (sourceId && sources.length === 0) {
+    return res.status(404).json({ ok: false, error: `Source '${sourceId}' not found` });
+  }
+
+  const results = [];
+  for (const source of sources) {
+    const result = await fetchFeed(source);
+    recordFetch(source.id, result.items.length, result.ok ? undefined : result.error);
+    results.push(result);
+  }
+
+  const totalItems = results.reduce((sum, r) => sum + r.items.length, 0);
+  const failed = results.filter((r) => !r.ok).length;
+  res.json({
+    ok: true,
+    totalSources: results.length,
+    successful: results.length - failed,
+    failed,
+    totalItems,
+    results,
+  });
+});
+
+// GET /api/osint/sources/refresh/status — last refresh status summary
+app.get('/api/osint/sources/refresh/status', (req, res) => {
+  const sources = listSources();
+  const summary = sources.map((s) => ({
+    id: s.id,
+    name: s.name,
+    enabled: s.enabled,
+    lastFetchedAt: s.lastFetchedAt || null,
+    lastErrorAt: s.lastErrorAt || null,
+    consecutiveFailures: s.consecutiveFailures,
+    itemCount: s.itemCount,
+  }));
+  const online = summary.filter((s) => s.enabled && s.consecutiveFailures === 0).length;
+  const total = sources.filter((s) => s.enabled).length;
+  res.json({ ok: true, total: sources.length, enabled: total, healthy: online, sources: summary });
+});
+
+// GET /api/osint/scheduler/status — scheduler health & status
+app.get('/api/osint/scheduler/status', (req, res) => {
+  const status = getScheduler().getStatus();
+  res.json({ ok: true, ...status });
+});
+
+// GET /api/osint/feed/rss-cache — get the latest deduped RSS feed from cache
+app.get('/api/osint/feed/rss-cache', (req, res) => {
+  const cache = readFeedCache();
+  if (!cache) {
+    return res.json({ ok: true, cached: false, data: [], message: 'No cached RSS feed yet' });
+  }
+  res.json({ ok: true, cached: true, data: cache.items, updatedAt: cache.updatedAt, stats: cache.stats, totalUnique: cache.totalUnique });
+});
+
+// GET /api/osint/feed/cache-list — list all cache files (debug / admin)
+app.get('/api/osint/feed/cache-list', (req, res) => {
+  const files = listCacheFiles();
+  res.json({ ok: true, cacheDir: getCacheDir(), files });
+});
+
+// GET /api/osint/feed/timeline — scored, filtered, paginated timeline
+app.get('/api/osint/feed/timeline', async (req, res) => {
+  try {
+    // Load scored items from cache
+    const cache = readFeedCache();
+    if (!cache || !cache.items.length) {
+      return res.json({ ok: true, items: [], total: 0, page: 1, pageSize: 20, totalPages: 0 });
+    }
+
+    // Score items (idempotent — rescore on each query for fresh timeliness)
+    const credEngine = createCredibilityEngine();
+    const scored = credEngine.scoreAll(cache.items);
+
+    // Parse filter params
+    const params: FilterParams = {};
+    if (req.query.from) params.from = String(req.query.from);
+    if (req.query.to) params.to = String(req.query.to);
+    if (req.query.sources) params.sources = String(req.query.sources).split(',').map(s => s.trim()).filter(Boolean);
+    if (req.query.kinds) params.kinds = String(req.query.kinds).split(',').map(k => k.trim()).filter(Boolean) as any;
+    if (req.query.minCredibility !== undefined) params.minCredibility = Number(req.query.minCredibility);
+    if (req.query.sort) params.sort = String(req.query.sort) as any;
+    if (req.query.order) params.order = String(req.query.order) as any;
+    if (req.query.page) params.page = Number(req.query.page);
+    if (req.query.pageSize) params.pageSize = Number(req.query.pageSize);
+    if (req.query.search) params.search = String(req.query.search);
+
+    // Apply filter engine
+    const filterEngine = createFilterEngine();
+    const result = filterEngine.apply(scored, params);
+
+    res.json({
+      ok: true,
+      items: result.items,
+      total: result.total,
+      page: result.page,
+      pageSize: result.pageSize,
+      totalPages: result.totalPages,
+      applied: params,
+    });
+  } catch (err: any) {
+    console.error('[timeline] Error:', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// GET /api/osint/feed/export — export timeline results as JSON/CSV
+app.get('/api/osint/feed/export', async (req, res) => {
+  try {
+    const format: ExportFormat = (req.query.format === 'csv' ? 'csv' : 'json');
+
+    // Parse filter params (same as timeline)
+    const params: FilterParams = {};
+    if (req.query.from) params.from = String(req.query.from);
+    if (req.query.to) params.to = String(req.query.to);
+    if (req.query.sources) params.sources = String(req.query.sources).split(',').map(s => s.trim()).filter(Boolean);
+    if (req.query.minCredibility !== undefined) params.minCredibility = Number(req.query.minCredibility);
+
+    // Load and score
+    const cache = readFeedCache();
+    const items = cache?.items || [];
+    const credEngine = createCredibilityEngine();
+    const scored = credEngine.scoreAll(items);
+
+    // Export
+    const exportPipeline = createExportPipeline();
+    const exportResult = exportPipeline.export(scored, { format, filter: params });
+
+    res.setHeader('Content-Type', exportResult.mimeType);
+    res.setHeader('Content-Disposition', `attachment; filename="${exportResult.filename}"`);
+    res.send(exportResult.content);
+  } catch (err: any) {
+    console.error('[export] Error:', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // Set up server side static file routing & Vite middleware
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
@@ -1471,6 +1710,9 @@ async function startServer() {
     // First refresh shortly after startup (10s delay to let Vite finish)
     setTimeout(autoRefresh, 10000);
     setInterval(autoRefresh, REFRESH_INTERVAL_MS);
+
+    // Start the RSS feed scheduler (checks every minute, refreshes due sources)
+    getScheduler().start();
   });
 }
 
