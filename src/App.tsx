@@ -172,6 +172,9 @@ export default function App() {
       }
 
       // 3. Provider Configurations Loading
+      // NOTE: LLM API keys stored in localStorage are readable by any JS running on
+      // the same origin (XSS risk). For production, proxy LLM calls through the backend
+      // so the key never reaches the browser. This is acceptable for the hackathon prototype.
       const activeP = localStorage.getItem('pancreas_ai_elements_active_provider') || 'siliconflow';
       setConfigProvider(activeP);
 

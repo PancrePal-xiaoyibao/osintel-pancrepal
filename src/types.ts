@@ -37,6 +37,8 @@ export interface OSINTItem {
   centerPriority?: boolean;
   reviewStatus?: 'pending' | 'needs_human_review' | 'approved' | 'rejected';
   sourceEvidence?: Array<{ title: string; url: string; note?: string }>;
+  /** Distinguishes live-fetched items from bundled mock/seed data. */
+  _source?: 'live' | 'mock';
 }
 
 export interface ErrorLogEntry {

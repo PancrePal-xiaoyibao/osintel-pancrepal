@@ -13,7 +13,8 @@ export const INITIAL_OSINT_FEED: OSINTItem[] = [
     importanceScore: 9.8,
     summary: "美国FDA授予强效非共价KRAS G12D抑制剂MRTX1133突破性疗法认定。临床I期早期数据显示，在经治的KRAS G12D突变晚期胰腺癌患者中客观缓解率（ORR）达到31%，且安全性良好。这标志着直接针对胰腺癌最常见突变（KRAS G12D占比约40%）的靶向治疗取得重大突破。",
     evidenceLevel: "B",
-    clickable: true
+    clickable: true,
+    _source: 'mock' as const,
   },
   {
     id: "osint-2",
@@ -28,7 +29,9 @@ export const INITIAL_OSINT_FEED: OSINTItem[] = [
     summary: "发表于《柳叶刀·肿瘤学》的NAPOLI-3随机III期临床试验结果确认：相比于传统的吉西他滨联合白蛋白Paclitaxel（Gem+Nab-P），采用NALIRIFOX方案作为转移性胰腺导管腺癌的一线治疗可显著改善中位总生存期（mOS: 11.1个月 vs 9.2个月，HR=0.75，p=0.04）。该研究确定了NALIRIFOX在适合高强度化疗的转移性胰腺癌患者中的一线标准地位。",
     evidenceLevel: "A",
     clinicalTrialId: "NCT04083235",
-    clickable: true
+    clickable: true,
+    _source: 'mock' as const,
+
   },
   {
     id: "osint-3",
@@ -43,7 +46,9 @@ export const INITIAL_OSINT_FEED: OSINTItem[] = [
     summary: "一项最新的II期临床招募宣告启动，重点研究ATR选择性抑制剂Berzosertib（M6620）联合奥沙利铂在携带ATM缺陷（ATM loss/mutation，约占胰腺癌的10%）的晚期胰腺癌患者中的疗效。ATM/ATR通路是合成致死策略中的明星靶点，该研究旨在探索无化疗或低毒敏感联合靶向方案。",
     evidenceLevel: "B",
     clinicalTrialId: "NCT04895641",
-    clickable: true
+    clickable: true,
+    _source: 'mock' as const,
+
   },
   {
     id: "osint-4",
@@ -57,7 +62,9 @@ export const INITIAL_OSINT_FEED: OSINTItem[] = [
     importanceScore: 8.0,
     summary: "海德堡大学胰腺外科中心修订了交界可切除胰腺癌（Borderline Resectable PDAC）的临床路径。新指南强调必须先由多学科门诊（MDT）评估，实施至少4-6周的改良FOLFIRINOX新辅助化疗加放疗提高R0切除率，并建议应用三维虚拟成像技术进行精细胰十二指肠切除术（Whipple术）规划，从而减少术后胰漏率至10%以下。",
     evidenceLevel: "B",
-    clickable: true
+    clickable: true,
+    _source: 'mock' as const,
+
   },
   {
     id: "osint-5",
@@ -71,7 +78,9 @@ export const INITIAL_OSINT_FEED: OSINTItem[] = [
     importanceScore: 7.8,
     summary: "欧洲肿瘤内科学会（ESMO）在最新指南中重申了外源性胰腺功能不全（EPI）对胰腺癌患者生存期的潜在负面危害。由于胰头肿瘤压迫或胰腺切除，约80%晚期患者存在严重吸收不良导致贫血和恶病质。指南给出量化指标：每餐推荐立即随餐服用5-7.5万单位活性胰酶（PERT），可使患者体重流失速度降低50%，总生存期间接延长约3.2个月。",
     evidenceLevel: "A",
-    clickable: true
+    clickable: true,
+    _source: 'mock' as const,
+
   },
   {
     id: "osint-6",
@@ -86,7 +95,9 @@ export const INITIAL_OSINT_FEED: OSINTItem[] = [
     summary: "日本京都大学附院在jRCT日本临床试验数据库发布了一项前瞻性随机对照临床研究结果。在胰体尾部占位切除术中，达芬奇机器人辅助的微创切除相比传统开腹手术，术中出血量减少68%，出院周程平均缩短4天，术后半年患者生存质量（SF-36评分）在疼痛程度和精神健康维度表现优势显著。",
     evidenceLevel: "B",
     clinicalTrialId: "jRCTs031250123",
-    clickable: true
+    clickable: true,
+    _source: 'mock' as const,
+
   },
   {
     id: "osint-7",
@@ -100,7 +111,9 @@ export const INITIAL_OSINT_FEED: OSINTItem[] = [
     importanceScore: 7.2,
     summary: "NCCN发布了针对高恶性肿瘤（如胰腺癌）患者的多维度心理筛查标准。鉴于“癌王”给患者带来的剧烈心理恐慌和抑郁（发病率高过60%），指南强烈建议在确诊后3天内、化疗每周期开展 Distress Thermometer（心理痛苦温度计）测评。并要求设立绿色通道，引入基于正念减压（MBSR）的专业心理辅导和轻度精神调节药物，能有效缓解患者的顽固性胃肠神经反应。",
     evidenceLevel: "B",
-    clickable: true
+    clickable: true,
+    _source: 'mock' as const,
+
   },
   {
     id: "osint-8",
@@ -114,7 +127,9 @@ export const INITIAL_OSINT_FEED: OSINTItem[] = [
     importanceScore: 6.8,
     summary: "世界卫生组织（WHO）发布的全球胰腺癌治疗指南指出，发达地区与欠发达地区在胰腺癌5年生存率方面仍然存在显著隔阂（13% vs 3%）。由于本病诊断延迟且缺乏标准的区域协作（MDT），早期手术筛查率极低。报告呼吁将多学科联合诊疗（MDT）方案和腹腔灌注化疗等标准技术列入基本卫生保障和医保报销范畴。",
     evidenceLevel: "C",
-    clickable: true
+    clickable: true,
+    _source: 'mock' as const,
+
   },
   {
     id: "osint-9",
@@ -128,7 +143,9 @@ export const INITIAL_OSINT_FEED: OSINTItem[] = [
     importanceScore: 7.5,
     summary: "著名患者援助基金会PanCan发布了2026最新生存者攻略礼包。包含三大高价值板块：免费的专业营养师定制菜谱（解决化疗期间的丧失胃口问题）、一键式临床招募筛查助理（PanCan Clinical Trial Finder）、以及全国患者互助小组（Peer-to-Peer Support）联系通道。已验证该礼包对新确诊患者的心理舒缓与自救效能提升十分关键。",
     evidenceLevel: "D",
-    clickable: true
+    clickable: true,
+    _source: 'mock' as const,
+
   }
 ];
 

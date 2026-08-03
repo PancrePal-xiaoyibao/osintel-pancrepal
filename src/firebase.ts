@@ -2,16 +2,16 @@ import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 
-// Try to load configurations from config file or env fallback
-import firebaseConfigLocal from '../firebase-applet-config.json';
-
+// Firebase config loaded exclusively from environment variables.
+// Create a local firebase-applet-config.json (gitignored) for dev convenience,
+// or set VITE_FIREBASE_* env vars. See .env.example for the full list.
 const firebaseConfig = {
-  apiKey: firebaseConfigLocal.apiKey || (import.meta as any).env.VITE_FIREBASE_API_KEY,
-  authDomain: firebaseConfigLocal.authDomain || (import.meta as any).env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: firebaseConfigLocal.projectId || (import.meta as any).env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: firebaseConfigLocal.storageBucket || (import.meta as any).env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: firebaseConfigLocal.messagingSenderId || (import.meta as any).env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: firebaseConfigLocal.appId || (import.meta as any).env.VITE_FIREBASE_APP_ID
+  apiKey: (import.meta as any).env.VITE_FIREBASE_API_KEY,
+  authDomain: (import.meta as any).env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: (import.meta as any).env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: (import.meta as any).env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: (import.meta as any).env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: (import.meta as any).env.VITE_FIREBASE_APP_ID
 };
 
 // Initialize Firebase app safely
