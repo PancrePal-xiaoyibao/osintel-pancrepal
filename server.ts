@@ -7,6 +7,11 @@ import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import { INITIAL_OSINT_FEED, INITIAL_RESOURCE_CENTERS, MOCK_15DAY_REPORT } from './src/seed-data';
+import { INITIAL_CENTER_HOSPITALS, INITIAL_CENTER_DOCTORS, INITIAL_CENTER_SERVICES } from './src/lib/centers/seed';
+import { generateSubId, validateSubmission, checkDuplicate, upsertFromSubmission } from './src/lib/centers/submission';
+import { createCenterQualityEngine } from './src/lib/centers/quality';
+import { submitRating, getRatings, getAggregate } from './src/lib/centers/ratings';
+import type { CenterSubmission, CenterRating } from './src/types';
 import { OSINTItem, WatchdogStatus, ErrorLogEntry, OSINTCategory, EvidenceLevel } from './src/types';
 import { runHealthCheck } from './src/lib/health-check';
 import { buildExtractiveDailySummary, responseMode, unavailableChatResponse } from './src/lib/mock-audit.ts';
@@ -65,6 +70,13 @@ const resourceCenters = [...INITIAL_RESOURCE_CENTERS].map(center => {
   }
   return center;
 });
+
+// In-memory centers data (fallback when Firestore is unavailable)
+let centerHospitals = [...INITIAL_CENTER_HOSPITALS];
+let centerDoctors = [...INITIAL_CENTER_DOCTORS];
+let centerServices = [...INITIAL_CENTER_SERVICES];
+let centerSubmissions: CenterSubmission[] = [];
+let centerRatings: CenterRating[] = [];
 
 const serverStartedAt = Date.now();
 
@@ -701,6 +713,352 @@ app.post('/api/osint/watchdog/repair', (req, res) => {
 // 6. Get map resources
 app.get('/api/osint/resources', (req, res) => {
   res.json({ status: 'ok', data: resourceCenters });
+});
+
+// ===== Center Information Database API Routes =====
+
+// --- Hospitals ---
+app.get('/api/centers/hospitals', (req, res) => {
+  const { city, province, country, hospitalLevel, hospitalType, sortBy, order, limit: limitStr, offset: offsetStr } = req.query;
+  let result = [...centerHospitals];
+
+  if (city) result = result.filter(h => h.city === city);
+  if (province) result = result.filter(h => h.province === (province as string));
+  if (country) result = result.filter(h => h.country === (country as string));
+  if (hospitalLevel) result = result.filter(h => h.hospitalLevel === (hospitalLevel as string));
+  if (hospitalType) result = result.filter(h => h.hospitalType === (hospitalType as string));
+
+  // Sort
+  const sortField = (sortBy as string) || 'qualityScore';
+  const sortDir = (order as string) === 'asc' ? 1 : -1;
+  result.sort((a, b) => {
+    const aVal = (a as unknown as Record<string, unknown>)[sortField] as number ?? 0;
+    const bVal = (b as unknown as Record<string, unknown>)[sortField] as number ?? 0;
+    return (bVal - aVal) * sortDir * -1;
+  });
+
+  // Pagination
+  const total = result.length;
+  const off = parseInt((offsetStr as string) || '0', 10) || 0;
+  const lim = parseInt((limitStr as string) || '50', 10) || 50;
+  const page = result.slice(off, off + lim);
+
+  res.json({ status: 'ok', data: page, total, offset: off, limit: lim });
+});
+
+app.get('/api/centers/hospitals/:id', (req, res) => {
+  const hospital = centerHospitals.find(h => h.id === req.params.id);
+  if (!hospital) {
+    return res.status(404).json({ status: 'error', message: 'Hospital not found' });
+  }
+  res.json({ status: 'ok', data: hospital });
+});
+
+app.post('/api/centers/hospitals', (req, res) => {
+  const hospital = req.body;
+  if (!hospital.id || !hospital.name) {
+    return res.status(400).json({ status: 'error', message: 'id and name are required' });
+  }
+  const existing = centerHospitals.findIndex(h => h.id === hospital.id);
+  if (existing >= 0) {
+    centerHospitals[existing] = { ...centerHospitals[existing], ...hospital, updatedAt: new Date().toISOString() };
+  } else {
+    centerHospitals.push({ ...hospital, updatedAt: new Date().toISOString() });
+  }
+  res.json({ status: 'ok', data: hospital });
+});
+
+app.put('/api/centers/hospitals/:id', (req, res) => {
+  const idx = centerHospitals.findIndex(h => h.id === req.params.id);
+  if (idx < 0) {
+    return res.status(404).json({ status: 'error', message: 'Hospital not found' });
+  }
+  centerHospitals[idx] = { ...centerHospitals[idx], ...req.body, id: req.params.id, updatedAt: new Date().toISOString() };
+  res.json({ status: 'ok', data: centerHospitals[idx] });
+});
+
+// --- Doctors ---
+app.get('/api/centers/doctors', (req, res) => {
+  const { hospitalId, specialty, title, sortBy, order, limit: limitStr, offset: offsetStr } = req.query;
+  let result = [...centerDoctors];
+
+  if (hospitalId) result = result.filter(d => d.hospitalIds.includes(hospitalId as string));
+  if (specialty) result = result.filter(d => d.specialties.some(s => s.includes(specialty as string)));
+  if (title) result = result.filter(d => d.title === (title as string));
+
+  const sortField = (sortBy as string) || 'qualityScore';
+  const sortDir = (order as string) === 'asc' ? 1 : -1;
+  result.sort((a, b) => {
+    const aVal = (a as unknown as Record<string, unknown>)[sortField] as number ?? 0;
+    const bVal = (b as unknown as Record<string, unknown>)[sortField] as number ?? 0;
+    return (bVal - aVal) * sortDir * -1;
+  });
+
+  const total = result.length;
+  const off = parseInt((offsetStr as string) || '0', 10) || 0;
+  const lim = parseInt((limitStr as string) || '50', 10) || 50;
+  const page = result.slice(off, off + lim);
+
+  res.json({ status: 'ok', data: page, total, offset: off, limit: lim });
+});
+
+app.get('/api/centers/doctors/:id', (req, res) => {
+  const doctor = centerDoctors.find(d => d.id === req.params.id);
+  if (!doctor) {
+    return res.status(404).json({ status: 'error', message: 'Doctor not found' });
+  }
+  res.json({ status: 'ok', data: doctor });
+});
+
+app.post('/api/centers/doctors', (req, res) => {
+  const doctor = req.body;
+  if (!doctor.id || !doctor.name) {
+    return res.status(400).json({ status: 'error', message: 'id and name are required' });
+  }
+  const existing = centerDoctors.findIndex(d => d.id === doctor.id);
+  if (existing >= 0) {
+    centerDoctors[existing] = { ...centerDoctors[existing], ...doctor, updatedAt: new Date().toISOString() };
+  } else {
+    centerDoctors.push({ ...doctor, updatedAt: new Date().toISOString() });
+  }
+  res.json({ status: 'ok', data: doctor });
+});
+
+app.put('/api/centers/doctors/:id', (req, res) => {
+  const idx = centerDoctors.findIndex(d => d.id === req.params.id);
+  if (idx < 0) {
+    return res.status(404).json({ status: 'error', message: 'Doctor not found' });
+  }
+  centerDoctors[idx] = { ...centerDoctors[idx], ...req.body, id: req.params.id, updatedAt: new Date().toISOString() };
+  res.json({ status: 'ok', data: centerDoctors[idx] });
+});
+
+// --- Services ---
+app.get('/api/centers/services', (req, res) => {
+  const { hospitalId, category, availability, sortBy, order, limit: limitStr, offset: offsetStr } = req.query;
+  let result = [...centerServices];
+
+  if (hospitalId) result = result.filter(s => s.hospitalId === (hospitalId as string));
+  if (category) result = result.filter(s => s.category === (category as string));
+  if (availability) result = result.filter(s => s.availability === (availability as string));
+
+  const sortField = (sortBy as string) || 'qualityScore';
+  const sortDir = (order as string) === 'asc' ? 1 : -1;
+  result.sort((a, b) => {
+    const aVal = (a as unknown as Record<string, unknown>)[sortField] as number ?? 0;
+    const bVal = (b as unknown as Record<string, unknown>)[sortField] as number ?? 0;
+    return (bVal - aVal) * sortDir * -1;
+  });
+
+  const total = result.length;
+  const off = parseInt((offsetStr as string) || '0', 10) || 0;
+  const lim = parseInt((limitStr as string) || '50', 10) || 50;
+  const page = result.slice(off, off + lim);
+
+  res.json({ status: 'ok', data: page, total, offset: off, limit: lim });
+});
+
+app.get('/api/centers/services/:id', (req, res) => {
+  const service = centerServices.find(s => s.id === req.params.id);
+  if (!service) {
+    return res.status(404).json({ status: 'error', message: 'Service not found' });
+  }
+  res.json({ status: 'ok', data: service });
+});
+
+app.post('/api/centers/services', (req, res) => {
+  const service = req.body;
+  if (!service.id || !service.name) {
+    return res.status(400).json({ status: 'error', message: 'id and name are required' });
+  }
+  const existing = centerServices.findIndex(s => s.id === service.id);
+  if (existing >= 0) {
+    centerServices[existing] = { ...centerServices[existing], ...service, updatedAt: new Date().toISOString() };
+  } else {
+    centerServices.push({ ...service, updatedAt: new Date().toISOString() });
+  }
+  res.json({ status: 'ok', data: service });
+});
+
+app.put('/api/centers/services/:id', (req, res) => {
+  const idx = centerServices.findIndex(s => s.id === req.params.id);
+  if (idx < 0) {
+    return res.status(404).json({ status: 'error', message: 'Service not found' });
+  }
+  centerServices[idx] = { ...centerServices[idx], ...req.body, id: req.params.id, updatedAt: new Date().toISOString() };
+  res.json({ status: 'ok', data: centerServices[idx] });
+});
+
+// ===== Center Submission & Review API Routes =====
+
+// POST: Submit a new center entry (community contribution)
+app.post('/api/centers/submissions', (req, res) => {
+  const errors = validateSubmission(req.body);
+  if (errors.length > 0) {
+    return res.status(400).json({ status: 'error', message: errors.join('; ') });
+  }
+
+  const { entityType, action, payload, submitterId, submitterName, sourceUrls } = req.body;
+
+  // Check for duplicates
+  const duplicate = checkDuplicate(centerSubmissions, entityType, sourceUrls);
+  if (duplicate) {
+    return res.status(409).json({
+      status: 'error',
+      message: `A similar submission already exists (id: ${duplicate.id}, status: ${duplicate.status})`,
+    });
+  }
+
+  const submission: CenterSubmission = {
+    id: generateSubId(),
+    entityType,
+    action,
+    payload,
+    submitterId: submitterId || undefined,
+    submitterName: submitterName || undefined,
+    status: 'pending',
+    sourceUrls: sourceUrls || [],
+    createdAt: new Date().toISOString(),
+  };
+
+  centerSubmissions.push(submission);
+  res.json({ status: 'ok', data: submission });
+});
+
+// GET: List submissions with optional status filter
+app.get('/api/centers/submissions', (req, res) => {
+  const { status, limit: limitStr, offset: offsetStr } = req.query;
+  let result = [...centerSubmissions];
+
+  if (status && ['pending', 'approved', 'rejected'].includes(status as string)) {
+    result = result.filter(s => s.status === (status as string));
+  }
+
+  // Sort by createdAt desc (newest first)
+  result.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+
+  const total = result.length;
+  const off = parseInt((offsetStr as string) || '0', 10) || 0;
+  const lim = parseInt((limitStr as string) || '50', 10) || 50;
+  const page = result.slice(off, off + lim);
+
+  res.json({ status: 'ok', data: page, total, offset: off, limit: lim });
+});
+
+// POST: Review a submission (approve or reject)
+app.post('/api/centers/submissions/:id/review', (req, res) => {
+  const { action, comment } = req.body;
+  const submission = centerSubmissions.find(s => s.id === req.params.id);
+
+  if (!submission) {
+    return res.status(404).json({ status: 'error', message: 'Submission not found' });
+  }
+
+  if (submission.status !== 'pending') {
+    return res.status(400).json({ status: 'error', message: `Submission already ${submission.status}` });
+  }
+
+  if (!action || !['approve', 'reject'].includes(action)) {
+    return res.status(400).json({ status: 'error', message: 'action must be "approve" or "reject"' });
+  }
+
+  if (action === 'approve') {
+    // Upsert the payload into the target entity array
+    try {
+      const result = upsertFromSubmission(
+        centerHospitals, centerDoctors, centerServices, submission
+      );
+      submission.status = 'approved';
+      submission.reviewComment = comment || `Auto-approved: ${result.created ? 'created' : 'updated'} ${submission.entityType} ${result.id}`;
+    } catch (err) {
+      return res.status(500).json({ status: 'error', message: `Failed to upsert: ${(err as Error).message}` });
+    }
+  } else {
+    submission.status = 'rejected';
+    submission.reviewComment = comment || 'No reason provided';
+  }
+
+  submission.reviewedAt = new Date().toISOString();
+  res.json({ status: 'ok', data: submission });
+});
+
+// GET: List current user's submissions
+app.get('/api/centers/submissions/my', (req, res) => {
+  const { userId } = req.query;
+  if (!userId) {
+    return res.status(400).json({ status: 'error', message: 'userId query parameter is required' });
+  }
+
+  const result = centerSubmissions
+    .filter(s => s.submitterId === (userId as string))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+
+  res.json({ status: 'ok', data: result, total: result.length });
+});
+
+// ===== Center Quality Scoring & Ratings API Routes =====
+
+// GET: Quality score breakdown for an entity
+app.get('/api/centers/quality/:entityType/:id', (req, res) => {
+  const { entityType, id } = req.params;
+
+  let entity: unknown;
+  switch (entityType) {
+    case 'hospital':
+      entity = centerHospitals.find(h => h.id === id);
+      break;
+    case 'doctor':
+      entity = centerDoctors.find(d => d.id === id);
+      break;
+    case 'service':
+      entity = centerServices.find(s => s.id === id);
+      break;
+    default:
+      return res.status(400).json({ status: 'error', message: 'entityType must be hospital, doctor, or service' });
+  }
+
+  if (!entity) {
+    return res.status(404).json({ status: 'error', message: `${entityType} not found: ${id}` });
+  }
+
+  const engine = createCenterQualityEngine();
+  const result = engine.scoreOne(entity as Parameters<typeof engine.scoreOne>[0]);
+
+  res.json({ status: 'ok', data: result });
+});
+
+// POST: Submit a rating for an entity
+app.post('/api/centers/ratings', (req, res) => {
+  const { entityType, entityId, userId, score, comment, aspects } = req.body;
+
+  if (!entityType || !entityId || !userId || score === undefined) {
+    return res.status(400).json({ status: 'error', message: 'entityType, entityId, userId, and score are required' });
+  }
+
+  if (!['hospital', 'doctor', 'service'].includes(entityType)) {
+    return res.status(400).json({ status: 'error', message: 'entityType must be hospital, doctor, or service' });
+  }
+
+  try {
+    const { rating, isNew } = submitRating(centerRatings, { entityType, entityId, userId, score, comment, aspects });
+    res.json({ status: 'ok', data: rating, isNew });
+  } catch (err) {
+    res.status(400).json({ status: 'error', message: (err as Error).message });
+  }
+});
+
+// GET: List ratings and aggregate for an entity
+app.get('/api/centers/ratings/:entityType/:entityId', (req, res) => {
+  const { entityType, entityId } = req.params;
+
+  if (!['hospital', 'doctor', 'service'].includes(entityType)) {
+    return res.status(400).json({ status: 'error', message: 'entityType must be hospital, doctor, or service' });
+  }
+
+  const ratings = getRatings(centerRatings, entityType, entityId);
+  const aggregate = getAggregate(centerRatings, entityType, entityId);
+
+  res.json({ status: 'ok', data: ratings, aggregate });
 });
 
 // 7. Get 15-day system report
