@@ -50,13 +50,16 @@ const HelpView = lazy(() => import('./components/HelpView'));
 const HotspotDrugsView = lazy(() => import('./components/HotspotDrugsView'));
 const MyPersonalView = lazy(() => import('./components/MyPersonalView'));
 const FloatingChatbot = lazy(() => import('./components/FloatingChatbot'));
+const CenterSubmissionForm = lazy(() => import('./components/CenterSubmissionForm'));
+const CenterAdminPanel = lazy(() => import('./components/CenterAdminPanel'));
+const CenterInfoView = lazy(() => import('./components/CenterInfoView'));
 
 const PROVIDER_PRESET_MODELS: Record<string, string[]> = Object.fromEntries(
   LLM_PROVIDER_IDS.map((id) => [id, getLlmProvider(id).defaultModels])
 );
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'feed' | 'map' | 'watchdog' | 'report' | 'guidelines' | 'target_insight' | 'patient_profile' | 'ai_elements' | 'hotspot_drugs' | 'help' | 'my'>('feed');
+  const [activeTab, setActiveTab] = useState<'feed' | 'map' | 'watchdog' | 'report' | 'guidelines' | 'target_insight' | 'patient_profile' | 'ai_elements' | 'hotspot_drugs' | 'help' | 'my' | 'centers'>('feed');
   const [expandedOpsSection, setExpandedOpsSection] = useState<'watchdog' | 'report' | null>(null);
   const [items, setItems] = useState<OSINTItem[]>([]);
   const [newsRefreshMode, setNewsRefreshMode] = useState<'aggregate' | 'knows' | 'fallback'>('fallback');
@@ -964,6 +967,18 @@ export default function App() {
               )}
             </button>
 
+            <button
+              onClick={() => setActiveTab('centers')}
+              className={`py-2 px-4 rounded-lg text-xs sm:text-sm font-semibold whitespace-nowrap transition cursor-pointer flex items-center gap-1.5 ${
+                activeTab === 'centers' 
+                  ? 'bg-slate-600/15 text-slate-200 font-medium border border-slate-500/30' 
+                  : 'text-slate-300/60 hover:text-slate-200 hover:bg-slate-900/10'
+              }`}
+            >
+              <span className="h-4 w-4 shrink-0 text-zinc-400">🏥</span>
+              {t.tabCenters || '胰腺中心'}
+            </button>
+
           </div>
         </div>
       </nav>
@@ -1177,6 +1192,12 @@ export default function App() {
                 onClearProfile={handleClearProfile}
                 language={activeLanguage}
               />
+            </Suspense>
+          )}
+
+          {activeTab === 'centers' && (
+            <Suspense fallback={<div className="rounded-2xl border border-white/10 bg-zinc-950/80 p-6 text-sm text-zinc-400">Loading 胰腺中心信息库...</div>}>
+              <CenterInfoView />
             </Suspense>
           )}
 

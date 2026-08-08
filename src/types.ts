@@ -76,6 +76,108 @@ export interface ResourceCenter {
   survivorResources?: string[];
 }
 
+// === Center Information Database Types ===
+
+export type HospitalLevel = '3A' | '3B' | '2A' | '2B' | 'international' | 'unknown';
+export type HospitalType = 'general' | 'cancer_center' | 'specialized' | 'university';
+export type DataQuality = 'public' | 'estimated' | 'mixed' | 'unverified';
+export type ServiceCategory = 'surgery' | 'chemotherapy' | 'radiotherapy' | 'intervention'
+  | 'nutrition' | 'psychology' | 'rehabilitation' | 'palliative'
+  | 'clinical_trial' | 'genetic_testing';
+export type ServiceAvailability = 'immediate' | 'within_week' | 'within_month' | 'queue_long' | 'unknown';
+
+export interface CenterHospital {
+  id: string;
+  name: string;
+  shortName?: string;
+  city: string;
+  province: string;
+  country: string;
+  latitude: number;
+  longitude: number;
+  hospitalLevel: HospitalLevel;
+  hospitalType: HospitalType;
+  accreditedBy?: string[];
+  pancreaticAnnualSurgeries?: number;
+  hasMDT: boolean;
+  mdtSchedule?: string;
+  contact?: string;
+  website?: string;
+  sourceUrls: string[];
+  dataQuality: DataQuality;
+  qualityScore: number;
+  verifiedAt?: string;
+  updatedAt: string;
+}
+
+export interface CenterDoctor {
+  id: string;
+  name: string;
+  title: string;
+  hospitalIds: string[];
+  departmentName?: string;
+  specialties: string[];
+  academicTitle?: string;
+  academicOrg?: string;
+  patientVolume?: number;
+  publications?: string[];
+  clinicalTrialIds?: string[];
+  sourceUrls: string[];
+  dataQuality: DataQuality;
+  qualityScore: number;
+  verifiedAt?: string;
+  updatedAt: string;
+}
+
+export interface CenterService {
+  id: string;
+  name: string;
+  description: string;
+  category: ServiceCategory;
+  hospitalId: string;
+  departmentName?: string;
+  availability: ServiceAvailability;
+  costRange?: string;
+  insuranceCoverage?: string[];
+  requirements?: string[];
+  sourceUrls: string[];
+  dataQuality: DataQuality;
+  qualityScore: number;
+  verifiedAt?: string;
+  updatedAt: string;
+}
+
+export interface CenterSubmission {
+  id: string;
+  entityType: 'hospital' | 'doctor' | 'service';
+  action: 'create' | 'update';
+  payload: Record<string, unknown>;
+  submitterId?: string;
+  submitterName?: string;
+  status: 'pending' | 'approved' | 'rejected';
+  reviewerId?: string;
+  reviewComment?: string;
+  sourceUrls: string[];
+  createdAt: string;
+  reviewedAt?: string;
+}
+
+export interface CenterRating {
+  id: string;
+  entityType: 'hospital' | 'doctor' | 'service';
+  entityId: string;
+  userId: string;
+  score: number;
+  comment?: string;
+  aspects?: {
+    expertise?: number;
+    communication?: number;
+    efficiency?: number;
+    facilities?: number;
+  };
+  createdAt: string;
+}
+
 export interface SystemReport15Day {
   generatedAt: string;
   title: string;
